@@ -1,0 +1,23 @@
+{
+  "name": "trustweave-contracts",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+    "wire-backend": "tsx scripts/wire-backend-env.ts",
+    "compile:offline": "node scripts/compile-check.cjs"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-viem": "^3.0.0",
+    "@openzeppelin/contracts": "^5.0.2",
+    "hardhat": "^2.22.6",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3",
+    "solc": "0.8.24",
+    "chai": "^4.5.0"
+  }
+}

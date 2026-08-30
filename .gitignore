@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Secrets — never commit a populated .env. Only .env.example belongs in the repo.
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Databases (contain seeded identities and audit chains)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Build output
+dist/
+build/
+.vite/
+coverage/
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+deployments/
+
+# Logs and OS noise
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Ignore PDFs and Temp Dirs
+*.pdf
+AgentProof_FINAL new updates/

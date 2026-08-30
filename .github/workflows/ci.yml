@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: |
+          source/frontend/package-lock.json
+          source/backend/package-lock.json
+          source/contracts/package-lock.json
+
+    - name: Install Frontend Dependencies
+      working-directory: ./source/frontend
+      run: npm ci
+
+    - name: Build Frontend
+      working-directory: ./source/frontend
+      run: npm run build
+
+    - name: Install Backend Dependencies
+      working-directory: ./source/backend
+      run: npm ci
+
+    - name: Typecheck Backend
+      working-directory: ./source/backend
+      run: npm run typecheck
+
+    - name: Test Backend
+      working-directory: ./source/backend
+      run: npm run test
+
+    - name: Install Contracts Dependencies
+      working-directory: ./source/contracts
+      run: npm ci
+
+    - name: Compile Contracts (Offline Check)
+      working-directory: ./source/contracts
+      run: npm run compile:offline
+      
+    - name: Test Contracts
+      working-directory: ./source/contracts
+      run: npm run test

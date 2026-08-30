@@ -1,0 +1,51 @@
+
+
+  AccessControlled (via IdentityRegistry)
+    ✔ lets the admin appoint a writer (1198ms)
+    ✔ refuses a non-admin appointing a writer
+    ✔ refuses a non-writer writing
+    ✔ stops all writes when paused, and resumes when unpaused
+    ✔ refuses a writer pausing the contract — writers record facts, they do not govern
+    ✔ revokes a compromised writer immediately
+    ✔ requires the incoming admin to accept, so a typo cannot brick governance
+    ✔ rejects the zero address as admin or writer
+
+  IdentityRegistry
+    ✔ registers an identity as a commitment only
+    ✔ refuses duplicate registration
+    ✔ suspends and reactivates
+    ✔ makes revocation permanent — a compromised key is never resurrected
+    ✔ refuses status changes on an unknown identity
+    ✔ refuses an attacker revoking someone else's identity
+
+  AssetRegistry
+    ✔ mints with owner and metadata commitments
+    ✔ refuses an unauthorized mint
+    ✔ refuses an unauthorized transfer
+    ✔ has no approve or operator delegation to exploit
+    ✔ blocks transfer of a frozen asset
+    ✔ allows transfer again once unfrozen
+    ✔ makes revocation terminal for assets too
+    ✔ refuses double minting the same token
+    ✔ refuses operations on an unknown token
+    ✔ records a metadata change as an event rather than silently
+
+  AgentRegistry
+    ✔ registers an active agent
+    ✔ pauses and resumes an agent
+    ✔ refuses an attacker pausing or revoking an agent
+    ✔ refuses an attacker widening an agent's capabilities
+    ✔ emits an event whenever capabilities change
+    ✔ makes agent revocation terminal
+    ✔ refuses duplicate agent registration
+
+  ProofRegistry
+    ✔ anchors a commitment and reports the block
+    ✔ refuses to overwrite an existing anchor
+    ✔ gives even the admin no way to alter or delete an anchor
+    ✔ refuses an unauthorized anchor
+    ✔ reports an unknown commitment as unanchored rather than reverting
+
+
+  36 passing (2s)
+

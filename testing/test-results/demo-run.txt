@@ -1,0 +1,74 @@
+[1mResetting to clean, deterministic seed data[0m
+  seeded                                         Northwind Industries
+  agent key                                      apk_5e8a0ecfb5…
+
+[1mDemo 1 — Home → Login → Authorization → User workspace[0m
+  identity                                       did:key:z6MkhtjQx2kQMdCM51dtVP6f…
+  org                                            Northwind Industries
+  roles                                          ['User']
+  scopes                                         ['Operations department']
+  [32m✓[0m workspace resolved                           user
+  [32m✓[0m no credential is refused                     401
+
+[1mDemo 4 — AI allowed payment → authorization → execution → webhook → audit → proof[0m
+  proposal                                       Acme Cloud Services 3000 conf=0.86
+  [32m✓[0m decision                                     ALLOW
+  [32m✓[0m executed                                     EXECUTED
+  [32m✓[0m labelled simulated                           True
+  [32m✓[0m reconciled                                   RECONCILED
+  [32m✓[0m audit chain valid                            True
+  proofs anchored                                2
+
+[1mDemo 5 — AI over-limit proposal → valid proposal → DENY → no execution[0m
+  proposal                                       Acme Cloud Services 250000 conf=0.86
+  [32m✓[0m decision                                     DENY
+  [32m✓[0m denied by the engine, not the parser         False
+  reason                                         ['LIMIT_EXCEEDED']
+  gate                                           AGENT_LIMITS -- Amount 250000 exceeds the agent transaction limit of 200000.
+
+[1mDemo 5b — prompt injection, well-formed proposal, still refused[0m
+  [32m✓[0m injection detected (reporting only)          True
+  [32m✓[0m decision                                     DENY
+  [32m✓[0m agent limit unchanged                        200000
+  [32m✓[0m no escalation                                False
+  [32m✓[0m only the authorized payment executed         1
+
+[1mDemo 3 — Manager approval → approve → execute[0m
+  [32m✓[0m decision                                     REQUIRE_APPROVAL
+  [32m✓[0m execute while pending refused                422
+  [32m✓[0m auditor cannot approve                       403
+  [32m✓[0m manager approves                             APPROVED
+  [32m✓[0m executes after approval                      EXECUTED
+  [32m✓[0m repeat decision is a no-op                   True
+
+[1mDemo 6 — unauthorized and cross-tenant access → DENY[0m
+  [32m✓[0m user → create identity                     403
+  [32m✓[0m auditor → create policy                    403
+  [32m✓[0m auditor → create payment                   403
+  [32m✓[0m forged x-role header ignored                 403
+  [32m✓[0m foreign resource id                          404
+
+[1mDemo 7 — unauthorized RAG retrieval → withheld with a reason[0m
+  [32m✓[0m restricted content absent                    False
+    withheld: Compensation Bands FY2026 (Restricted) -- Requires capability ORG_MANAGE.
+    withheld: Asset Handling Standard -- Belongs to another department.
+
+[1mDemo 8 — blockchain asset operation → registry → event → proof[0m
+  [32m✓[0m created as draft                             DRAFT
+  [32m✓[0m minted                                       ACTIVE
+  [32m✓[0m receipt marked simulated                     True
+  [32m✓[0m chain matches database                       True
+
+[1mDemo 2 — Admin control plane (runs last: it changes governing configuration)[0m
+  [32m✓[0m identity created                             Demo Hire
+  [32m✓[0m private key shown once                       True
+  [32m✓[0m role created                                 2
+  [32m✓[0m role assigned                                2
+  capability catalog                             47
+  [32m✓[0m policy activated                             ACTIVE
+  audit events                                   50
+  [32m✓[0m final audit chain valid                      True
+
+[1mResult[0m
+  passed: 36   failed: 0
+
