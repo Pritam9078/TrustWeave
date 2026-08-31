@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import * as paymentService from "../services/paymentService.js";
 import * as orgService from "../services/orgService.js";
 import { getRazorpayAdapter } from "../adapters/razorpay/index.js";
-import { one } from "../db/client.js";
+import { one } from "../db/clientV2.js";
 
 /**
  * Provider webhooks.
@@ -33,14 +33,14 @@ export async function webhookRoutes(app: FastifyInstance) {
     const entity = parsed?.payload?.payment?.entity ?? {};
     const providerEventId = parsed?.id ?? entity?.id ?? null;
 
-    const recorded = paymentService.recordWebhook({
+    const recorded = await paymentService.recordWebhook({
       provider: "razorpay", providerEventId, eventType,
       signatureValid: valid, rawBody, outcome: valid ? null : "INVALID_SIGNATURE",
     });
 
     if (!valid) {
       const intent = entity?.order_id
-        ? one<any>(`SELECT organization_id FROM payment_intents WHERE provider_order_id = ?`, entity.order_id)
+        ? await one<any>(`SELECT organization_id FROM payment_intents WHERE provider_order_id = ?`, entity.order_id)
         : null;
       if (intent) {
         orgService.recordSecurityEvent({
@@ -60,10 +60,10 @@ export async function webhookRoutes(app: FastifyInstance) {
     const orderId = entity?.order_id;
     if (!orderId) return reply.code(200).send({ ok: true, ignored: true, message: "No order reference in payload." });
 
-    const intentRow = one<any>(`SELECT organization_id FROM payment_intents WHERE provider_order_id = ?`, orderId);
+    const intentRow = await one<any>(`SELECT organization_id FROM payment_intents WHERE provider_order_id = ?`, orderId);
     if (!intentRow) return reply.code(200).send({ ok: true, ignored: true, message: "No matching payment intent." });
 
-    const result = paymentService.reconcileFromWebhook({
+    const result = await paymentService.reconcileFromWebhook({
       organizationId: intentRow.organization_id,
       orderId, paymentId: entity.id, event: eventType,
       amountMinor: Number(entity.amount ?? 0), currency: String(entity.currency ?? "INR"),

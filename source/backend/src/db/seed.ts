@@ -1,4 +1,4 @@
-import { initDb, run, one, j } from "./client.js";
+import { initDb, run, one, j } from "./clientV2.js";
 import { migrate } from "./migrate.js";
 import { env } from "../config/env.js";
 import { newId, newTraceId } from "../core/ids.js";
@@ -35,11 +35,11 @@ if (process.env.NODE_ENV === "production") {
 }
 
 async function seed() {
-  await initDb(env.DATABASE_FILE);
+  await initDb(env.DATABASE_URL);
   await migrate();
-  orgService.syncCapabilityCatalog();
+  await orgService.syncCapabilityCatalog();
 
-  const existing = one<any>(`SELECT id FROM organizations WHERE slug = 'northwind'`);
+  const existing = await one<any>(`SELECT id FROM organizations WHERE slug = 'northwind'`);
   if (existing) {
     console.log("Organization 'northwind' already exists. Run `npm run db:reset` first for a clean seed.");
     return;
@@ -47,7 +47,7 @@ async function seed() {
 
   /* ------------------------------------------------------------ organization */
   const orgId = newId("org");
-  run(`INSERT INTO organizations (id, name, slug, created_at) VALUES (?,?,?,?)`,
+  await run(`INSERT INTO organizations (id, name, slug, created_at) VALUES (?,?,?,?)`,
     orgId, "Northwind Industries", "northwind", nowIso());
 
   const finance = orgService.createDepartment(orgId, "Finance", "FIN");
@@ -60,7 +60,7 @@ async function seed() {
     const role = orgService.createRole(orgId, {
       name, description: template.description, capabilities: [...template.capabilities],
     });
-    roles[name] = role.id;
+    roles[name] = (await role).id;
   }
 
   /* ----------------------------------------------------------------- scopes */
@@ -70,13 +70,13 @@ async function seed() {
   });
   const financeScope = orgService.createScope(orgId, {
     name: "Finance department", scopeType: "DEPARTMENT",
-    selector: { departmentId: finance.id },
+    selector: { departmentId: (await finance).id },
     // Business-hours constraint: proves the time-window gate with something visible.
     constraints: { maxAmount: 500000, timeWindow: { start: "06:00", end: "23:59", timezoneOffsetMinutes: 330 } },
   });
   const opsScope = orgService.createScope(orgId, {
     name: "Operations department", scopeType: "DEPARTMENT",
-    selector: { departmentId: operations.id }, constraints: { maxAmount: 200000 },
+    selector: { departmentId: (await operations).id }, constraints: { maxAmount: 200000 },
   });
   const agentVendorScope = orgService.createScope(orgId, {
     name: "Approved vendors (agent)", scopeType: "VENDOR",
@@ -84,8 +84,8 @@ async function seed() {
     constraints: { maxAmount: 100000 },
   });
 
-  orgService.attachScopeToRole(roles.Admin, orgScope.id);
-  orgService.attachScopeToRole(roles.Auditor, orgScope.id);
+  orgService.attachScopeToRole(roles.Admin, (await orgScope).id);
+  orgService.attachScopeToRole(roles.Auditor, (await orgScope).id);
   // The User role gets no organization-wide scope on purpose. A plain member sees only
   // their own department, granted through their membership, so departmental isolation
   // is real rather than nominal.
@@ -156,47 +156,47 @@ async function seed() {
     },
   ];
 
-  for (const p of policies) policyService.createPolicy(orgId, "system", p as any);
+  for (const p of policies) await policyService.createPolicy(orgId, "system", p as any);
 
   /* ------------------------------------------------------------- identities */
   const people = [
     { key: "admin",   name: "Ada Sharma",     email: "admin@northwind.test",   role: "Admin",   dept: null,            scopes: [] },
-    { key: "manager", name: "Meera Iyer",     email: "manager@northwind.test", role: "Manager", dept: finance.id,      scopes: [financeScope.id] },
+    { key: "manager", name: "Meera Iyer",     email: "manager@northwind.test", role: "Manager", dept: (await finance).id,      scopes: [(await financeScope).id] },
     { key: "auditor", name: "Arun Verma",     email: "auditor@northwind.test", role: "Auditor", dept: null,            scopes: [] },
-    { key: "user",    name: "Ravi Nair",      email: "user@northwind.test",    role: "User",    dept: operations.id,   scopes: [opsScope.id] },
-    { key: "opsmgr",  name: "Priya Deshpande",email: "opsmgr@northwind.test",  role: "Manager", dept: operations.id,   scopes: [opsScope.id] },
+    { key: "user",    name: "Ravi Nair",      email: "user@northwind.test",    role: "User",    dept: (await operations).id,   scopes: [(await opsScope).id] },
+    { key: "opsmgr",  name: "Priya Deshpande",email: "opsmgr@northwind.test",  role: "Manager", dept: (await operations).id,   scopes: [(await opsScope).id] },
   ];
 
   const created: Record<string, { id: string; did: string; privateKey: string | null }> = {};
   for (const p of people) {
-    const { identity, privateKey } = identityService.createIdentity({
+    const { identity, privateKey } = await identityService.createIdentity({
       organizationId: orgId, displayName: p.name, email: p.email,
       kind: "HUMAN", departmentId: p.dept, password: DEMO_PASSWORD, status: "ACTIVE",
     });
-    const membership = identityService.getMembership(identity.id, orgId)!;
-    identityService.assignRole(membership.id, roles[p.role], "system");
-    for (const s of p.scopes) identityService.assignScopeToMembership(membership.id, s);
+    const membership = (await identityService.getMembership(identity.id, orgId))!;
+    await identityService.assignRole(membership.id, roles[p.role], "system");
+    for (const s of p.scopes) await identityService.assignScopeToMembership(membership.id, s);
     created[p.key] = { id: identity.id, did: identity.did, privateKey };
   }
 
-  const adminActor = identityService.buildActorContext(created.admin.id, orgId)! as ActorContext;
+  const adminActor = (await identityService.buildActorContext(created.admin.id, orgId))! as ActorContext;
 
   /* ------------------------------------------------------------- collections & assets */
-  const equipment = assetService.createCollection(orgId, "IT Equipment", "Laptops, monitors and peripherals issued to staff.");
-  const licences = assetService.createCollection(orgId, "Software Licences", "Per-seat software entitlements.");
-  const vehicles = assetService.createCollection(orgId, "Fleet Vehicles", "Company-owned vehicles.");
+  const equipment = await assetService.createCollection(orgId, "IT Equipment", "Laptops, monitors and peripherals issued to staff.");
+  const licences = await assetService.createCollection(orgId, "Software Licences", "Per-seat software entitlements.");
+  const vehicles = await assetService.createCollection(orgId, "Fleet Vehicles", "Company-owned vehicles.");
 
   const assetSpecs = [
-    { name: "MacBook Pro 16in — NW-0417", assetType: "LAPTOP",  collectionId: equipment.id, departmentId: finance.id,    owner: created.manager.did, mint: true,  metadata: { serial: "NW-0417", purchaseDate: "2025-03-11", value: 289000 } },
-    { name: "Dell UltraSharp U2723 — NW-0512", assetType: "MONITOR", collectionId: equipment.id, departmentId: operations.id, owner: created.user.did, mint: true, metadata: { serial: "NW-0512", purchaseDate: "2025-06-02", value: 42000 } },
-    { name: "Figma Organization Seat #14", assetType: "LICENCE", collectionId: licences.id, departmentId: operations.id, owner: created.user.did, mint: true, metadata: { seat: 14, renewal: "2026-11-01", value: 45000 } },
-    { name: "Adobe CC Seat #3", assetType: "LICENCE", collectionId: licences.id, departmentId: finance.id, owner: created.manager.did, mint: false, metadata: { seat: 3, renewal: "2026-09-15", value: 62000 } },
-    { name: "Tata Nexon EV — MH01 AB 4417", assetType: "VEHICLE", collectionId: vehicles.id, departmentId: operations.id, owner: created.admin.did, mint: true, metadata: { registration: "MH01AB4417", value: 1750000 } },
-    { name: "ThinkPad X1 Carbon — NW-0633", assetType: "LAPTOP", collectionId: equipment.id, departmentId: legal.id, owner: null, mint: false, metadata: { serial: "NW-0633", purchaseDate: "2026-01-20", value: 198000 } },
+    { name: "MacBook Pro 16in — NW-0417", assetType: "LAPTOP",  collectionId: equipment.id, departmentId: (await finance).id,    owner: created.manager.did, mint: true,  metadata: { serial: "NW-0417", purchaseDate: "2025-03-11", value: 289000 } },
+    { name: "Dell UltraSharp U2723 — NW-0512", assetType: "MONITOR", collectionId: equipment.id, departmentId: (await operations).id, owner: created.user.did, mint: true, metadata: { serial: "NW-0512", purchaseDate: "2025-06-02", value: 42000 } },
+    { name: "Figma Organization Seat #14", assetType: "LICENCE", collectionId: licences.id, departmentId: (await operations).id, owner: created.user.did, mint: true, metadata: { seat: 14, renewal: "2026-11-01", value: 45000 } },
+    { name: "Adobe CC Seat #3", assetType: "LICENCE", collectionId: licences.id, departmentId: (await finance).id, owner: created.manager.did, mint: false, metadata: { seat: 3, renewal: "2026-09-15", value: 62000 } },
+    { name: "Tata Nexon EV — MH01 AB 4417", assetType: "VEHICLE", collectionId: vehicles.id, departmentId: (await operations).id, owner: created.admin.did, mint: true, metadata: { registration: "MH01AB4417", value: 1750000 } },
+    { name: "ThinkPad X1 Carbon — NW-0633", assetType: "LAPTOP", collectionId: equipment.id, departmentId: (await legal).id, owner: null, mint: false, metadata: { serial: "NW-0633", purchaseDate: "2026-01-20", value: 198000 } },
   ];
 
   for (const spec of assetSpecs) {
-    const asset = assetService.createAsset(adminActor, newTraceId(), {
+    const asset = await assetService.createAsset(adminActor, newTraceId(), {
       name: spec.name, assetType: spec.assetType, collectionId: spec.collectionId,
       departmentId: spec.departmentId, ownerDid: spec.owner, metadata: spec.metadata,
     });
@@ -207,9 +207,9 @@ async function seed() {
   const { agent, token } = await agentService.registerAgent(adminActor, {
     name: "FinanceAgent-01",
     ownerIdentityId: created.manager.id,
-    departmentId: finance.id,
+    departmentId: (await finance).id,
     capabilities: ["PAYMENT_CREATE", "PAYMENT_READ", "ASSET_READ", "KNOWLEDGE_READ", "POLICY_READ", "AGENT_INVOKE"],
-    scopeIds: [financeScope.id],
+    scopeIds: [(await financeScope).id],
     tools: ["get_policy", "get_invoice", "get_asset", "search_knowledge", "create_payment_intent"],
     limits: { transactionLimit: 200000, approvalThreshold: 50000, dailyLimit: 500000, velocityCountPerDay: 10 },
   });
@@ -234,7 +234,7 @@ Automated agents must cite at least one supporting document for every payment th
     },
     {
       sourceType: "INVOICE", title: "Invoice INV-2026-0042 — Acme Cloud Services", classification: "INTERNAL" as const,
-      departmentId: finance.id, scope: { departmentId: finance.id },
+      departmentId: (await finance).id, scope: { departmentId: (await finance).id },
       content: `Invoice INV-2026-0042
 Vendor: Acme Cloud Services
 Date: 3 August 2026
@@ -246,7 +246,7 @@ Approved budget line: Finance / Cloud Infrastructure.`,
     },
     {
       sourceType: "INVOICE", title: "Invoice INV-2026-0043 — Globex Logistics", classification: "INTERNAL" as const,
-      departmentId: finance.id, scope: { departmentId: finance.id },
+      departmentId: (await finance).id, scope: { departmentId: (await finance).id },
       content: `Invoice INV-2026-0043
 Vendor: Globex Logistics
 Date: 9 August 2026
@@ -258,7 +258,7 @@ Note: This amount exceeds the fifty thousand rupee direct-payment threshold and 
     },
     {
       sourceType: "HR_DOC", title: "Compensation Bands FY2026 (Restricted)", classification: "RESTRICTED" as const,
-      departmentId: legal.id, scope: { departmentId: legal.id }, requiredCapability: "ORG_MANAGE",
+      departmentId: (await legal).id, scope: { departmentId: (await legal).id }, requiredCapability: "ORG_MANAGE",
       content: `Restricted document. Compensation bands for FY2026 by grade and location. This document exists in the corpus specifically to demonstrate access filtering: an agent or user scoped to Finance or Operations must never see this content in a retrieval result, and the retrieval response should report it as excluded.`,
     },
     {
@@ -268,12 +268,12 @@ Note: This amount exceeds the fifty thousand rupee direct-payment threshold and 
     },
     {
       sourceType: "OPERATIONS", title: "Asset Handling Standard", classification: "INTERNAL" as const,
-      departmentId: operations.id, scope: { departmentId: operations.id },
+      departmentId: (await operations).id, scope: { departmentId: (await operations).id },
       content: `Asset handling standard. Every issued device is registered as an on-chain asset record with a metadata commitment. Transfers between employees must be recorded through the TrustWeave console so the ownership history remains verifiable. An automated agent may propose a transfer but may never execute one; a human holding ASSET_TRANSFER must approve it. Frozen assets cannot be transferred until unfrozen by an Administrator.`,
     },
   ];
 
-  for (const doc of documents) ragService.ingest({ organizationId: orgId, ...doc } as any);
+  for (const doc of documents) await ragService.ingest({ organizationId: orgId, ...doc } as any);
 
   /* ------------------------------------------------------------------ report */
   console.log(`

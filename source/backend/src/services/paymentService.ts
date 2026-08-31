@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId, newTraceId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { hashObject, sha256Hex } from "../core/hash.js";
@@ -44,8 +44,8 @@ export interface CreateIntentInput {
   idempotencyKey?: string | null;
 }
 
-export function getIntent(organizationId: string, id: string) {
-  return one<any>(
+export async function getIntent(organizationId: string, id: string) {
+  return await one<any>(
     `SELECT p.*, i.display_name AS actor_name, i.did AS actor_did, ag.name AS agent_name, d.name AS department_name
      FROM payment_intents p
      LEFT JOIN identities i ON i.id = p.actor_identity_id
@@ -56,13 +56,13 @@ export function getIntent(organizationId: string, id: string) {
   );
 }
 
-export function listIntents(organizationId: string, opts: { state?: string; agentId?: string; actorId?: string; limit?: number } = {}) {
+export async function listIntents(organizationId: string, opts: { state?: string; agentId?: string; actorId?: string; limit?: number } = {}) {
   const where = ["p.organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.state) { where.push("p.state = ?"); params.push(opts.state); }
   if (opts.agentId) { where.push("p.agent_id = ?"); params.push(opts.agentId); }
   if (opts.actorId) { where.push("p.actor_identity_id = ?"); params.push(opts.actorId); }
-  return many<any>(
+  return await many<any>(
     `SELECT p.*, i.display_name AS actor_name, i.did AS actor_did, ag.name AS agent_name, d.name AS department_name
      FROM payment_intents p
      LEFT JOIN identities i ON i.id = p.actor_identity_id
@@ -79,7 +79,7 @@ export function listIntents(organizationId: string, opts: { state?: string; agen
  * (actor, merchant, amount, invoice, minute), which collapses accidental resubmits
  * while still allowing a genuine second identical payment a minute later.
  */
-export function createIntent(actor: ActorContext, input: CreateIntentInput) {
+export async function createIntent(actor: ActorContext, input: CreateIntentInput) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) {
     throw badRequest("INVALID_AMOUNT", "Amount must be a positive number.");
   }
@@ -92,19 +92,19 @@ export function createIntent(actor: ActorContext, input: CreateIntentInput) {
   // scope them. A globally unique key would mean one tenant's client-chosen key could
   // collide with another's — turning a routine retry into either a cross-tenant read or
   // a spurious conflict, neither of which the caller could explain.
-  const existing = one<any>(
+  const existing = await one<any>(
     `SELECT * FROM payment_intents WHERE organization_id = ? AND idempotency_key = ?`,
     actor.organizationId, idempotencyKey,
   );
   if (existing) {
-    return { intent: getIntent(actor.organizationId, existing.id)!, deduplicated: true };
+    return { intent: await getIntent(actor.organizationId, existing.id)!, deduplicated: true };
   }
 
   const id = newId("pi");
   const traceId = newTraceId();
   const ts = nowIso();
 
-  run(
+  await run(
     `INSERT INTO payment_intents (id, organization_id, actor_identity_id, agent_id, department_id, raw_request,
       merchant, amount, currency, purpose, invoice_ref, evidence_json, state, idempotency_key, trace_id, created_at, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -114,7 +114,7 @@ export function createIntent(actor: ActorContext, input: CreateIntentInput) {
     j.enc(input.evidence ?? []), "DRAFT", idempotencyKey, traceId, ts, ts,
   );
 
-  audit.record({
+  await audit.record({
     organizationId: actor.organizationId, traceId,
     actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
     action: "PAYMENT_INTENT_CREATED", resourceType: "PAYMENT", resourceId: id,
@@ -122,7 +122,7 @@ export function createIntent(actor: ActorContext, input: CreateIntentInput) {
     payload: { merchant: input.merchant, amount: input.amount, currency, invoiceRef: input.invoiceRef ?? null },
   });
 
-  return { intent: getIntent(actor.organizationId, id)!, deduplicated: false };
+  return { intent: await getIntent(actor.organizationId, id)!, deduplicated: false };
 }
 
 /**
@@ -132,18 +132,18 @@ export function createIntent(actor: ActorContext, input: CreateIntentInput) {
  * not from any caller-supplied field. This function takes no amount parameter, so
  * there is no way to authorize one figure and execute another.
  */
-export function authorizeIntent(actor: ActorContext, intentId: string, ip?: string | null) {
-  const intent = getIntent(actor.organizationId, intentId);
+export async function authorizeIntent(actor: ActorContext, intentId: string, ip?: string | null) {
+  const intent = await getIntent(actor.organizationId, intentId);
   if (!intent) throw notFound("Payment intent not found.");
   if (TERMINAL.includes(intent.state)) throw unprocessable("TERMINAL_STATE", `This intent is already ${intent.state}.`);
   if (["AUTHORIZED", "EXECUTING", "EXECUTED"].includes(intent.state)) {
     return { intent, decision: intent.decision, alreadyAuthorized: true, evaluation: [] as any[], approval: null };
   }
 
-  run(`UPDATE payment_intents SET state = 'AUTHORIZING', updated_at = ? WHERE id = ?`, nowIso(), intentId);
+  await run(`UPDATE payment_intents SET state = 'AUTHORIZING', updated_at = ? WHERE id = ?`, nowIso(), intentId);
 
   const evidence = j.dec<string[]>(intent.evidence_json, []);
-  const result = authz.check({
+  const result = await authz.check({
     actor,
     action: "PAYMENT_CREATE",
     resource: {
@@ -161,7 +161,7 @@ export function authorizeIntent(actor: ActorContext, intentId: string, ip?: stri
     traceId: intent.trace_id,
   });
 
-  const auditEvent = audit.record({
+  const auditEvent = await audit.record({
     organizationId: actor.organizationId, traceId: intent.trace_id,
     actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
     action: "PAYMENT_AUTHORIZE", resourceType: "PAYMENT", resourceId: intentId,
@@ -180,7 +180,7 @@ export function authorizeIntent(actor: ActorContext, intentId: string, ip?: stri
     nextState = "DENIED";
   } else if (result.decision === "REQUIRE_APPROVAL") {
     nextState = "AWAITING_APPROVAL";
-    approval = approvalService.createApproval({
+    approval = await approvalService.createApproval({
       organizationId: actor.organizationId,
       requestType: "PAYMENT", requestId: intentId,
       requestedBy: actor.identityId,
@@ -194,7 +194,7 @@ export function authorizeIntent(actor: ActorContext, intentId: string, ip?: stri
     nextState = "AUTHORIZED";
   }
 
-  run(
+  await run(
     `UPDATE payment_intents SET state = ?, decision = ?, reason_codes = ?, policy_id = ?, policy_version = ?, approval_id = ?, updated_at = ? WHERE id = ?`,
     nextState, result.decision, j.enc(result.reasonCodes), result.policyId, result.policyVersion,
     approval?.id ?? null, nowIso(), intentId,
@@ -211,7 +211,7 @@ export function authorizeIntent(actor: ActorContext, intentId: string, ip?: stri
   }
 
   return {
-    intent: getIntent(actor.organizationId, intentId)!,
+    intent: await getIntent(actor.organizationId, intentId)!,
     decision: result.decision,
     reasonCodes: result.reasonCodes,
     evaluation: result.evaluation,
@@ -222,13 +222,13 @@ export function authorizeIntent(actor: ActorContext, intentId: string, ip?: stri
 }
 
 /** Called after an approval decision, to move the intent forward or close it. */
-export function applyApprovalOutcome(organizationId: string, intentId: string, approved: boolean) {
-  const intent = getIntent(organizationId, intentId);
+export async function applyApprovalOutcome(organizationId: string, intentId: string, approved: boolean) {
+  const intent = await getIntent(organizationId, intentId);
   if (!intent) throw notFound("Payment intent not found.");
   if (intent.state !== "AWAITING_APPROVAL") return intent;
-  run(`UPDATE payment_intents SET state = ?, updated_at = ? WHERE id = ?`,
+  await run(`UPDATE payment_intents SET state = ?, updated_at = ? WHERE id = ?`,
     approved ? "AUTHORIZED" : "DENIED", nowIso(), intentId);
-  return getIntent(organizationId, intentId)!;
+  return await getIntent(organizationId, intentId)!;
 }
 
 /**
@@ -240,7 +240,7 @@ export function applyApprovalOutcome(organizationId: string, intentId: string, a
  * would still be spendable.
  */
 export async function executeIntent(actor: ActorContext, intentId: string, ip?: string | null) {
-  const intent = getIntent(actor.organizationId, intentId);
+  const intent = await getIntent(actor.organizationId, intentId);
   if (!intent) throw notFound("Payment intent not found.");
 
   // Idempotent replay: a repeated execute returns the existing execution rather than
@@ -252,7 +252,7 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
     throw unprocessable("NOT_AUTHORIZED", `Intent is ${intent.state}; only AUTHORIZED intents can execute.`);
   }
   if (intent.approval_id) {
-    const approval = one<any>(
+    const approval = await one<any>(
       `SELECT * FROM approvals WHERE organization_id = ? AND id = ?`,
       intent.organization_id, intent.approval_id,
     );
@@ -261,7 +261,7 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
     }
   }
 
-  authz.enforce({
+  await authz.enforce({
     actor, action: "PAYMENT_EXECUTE",
     resource: { type: "PAYMENT", id: intentId, organizationId: intent.organization_id, departmentId: intent.department_id, vendor: intent.merchant },
     context: { amount: intent.amount, currency: intent.currency, merchant: intent.merchant },
@@ -269,7 +269,7 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
     payload: { stage: "pre-execution re-check" },
   });
 
-  run(`UPDATE payment_intents SET state = 'EXECUTING', updated_at = ? WHERE id = ?`, nowIso(), intentId);
+  await run(`UPDATE payment_intents SET state = 'EXECUTING', updated_at = ? WHERE id = ?`, nowIso(), intentId);
 
   const razorpay = getRazorpayAdapter();
   try {
@@ -285,10 +285,10 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
     // Record which adapter actually executed this. Without it, a payment created against
     // the deterministic local provider is indistinguishable from one that moved real
     // money — and the whole point of the test adapter is that no money moved.
-    run(`UPDATE payment_intents SET provider_order_id = ?, provider_state = ?, provider_adapter = ?, state = 'EXECUTED', updated_at = ? WHERE id = ?`,
+    await run(`UPDATE payment_intents SET provider_order_id = ?, provider_state = ?, provider_adapter = ?, state = 'EXECUTED', updated_at = ? WHERE id = ?`,
       order.id, order.status, razorpay.kind, nowIso(), intentId);
 
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId: intent.trace_id,
       actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
       action: "PAYMENT_EXECUTED", resourceType: "PAYMENT", resourceId: intentId,
@@ -305,11 +305,11 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
       },
     }).catch(() => {});
 
-    return { intent: getIntent(actor.organizationId, intentId)!, replayed: false, order };
+    return { intent: await getIntent(actor.organizationId, intentId)!, replayed: false, order };
   } catch (err: any) {
-    run(`UPDATE payment_intents SET state = 'FAILED', failure_reason = ?, updated_at = ? WHERE id = ?`,
+    await run(`UPDATE payment_intents SET state = 'FAILED', failure_reason = ?, updated_at = ? WHERE id = ?`,
       String(err?.message ?? err), nowIso(), intentId);
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId: intent.trace_id,
       actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
       action: "PAYMENT_EXECUTION_FAILED", resourceType: "PAYMENT", resourceId: intentId,
@@ -329,7 +329,7 @@ export async function executeIntent(actor: ActorContext, intentId: string, ip?: 
  * different amount is a reconciliation mismatch, not a success — the spec's "never
  * trust client success state" applies to the provider too.
  */
-export function reconcileFromWebhook(params: {
+export async function reconcileFromWebhook(params: {
   organizationId: string;
   orderId: string;
   paymentId: string;
@@ -339,7 +339,7 @@ export function reconcileFromWebhook(params: {
   providerEventId?: string | null;
   rawBody: string;
 }) {
-  const intent = one<any>(
+  const intent = await one<any>(
     `SELECT * FROM payment_intents WHERE organization_id = ? AND provider_order_id = ?`,
     params.organizationId, params.orderId,
   );
@@ -352,10 +352,10 @@ export function reconcileFromWebhook(params: {
   const currencyMatches = params.currency.toUpperCase() === String(intent.currency).toUpperCase();
 
   if (!amountMatches || !currencyMatches) {
-    run(`UPDATE payment_intents SET provider_state = ?, failure_reason = ?, updated_at = ? WHERE id = ?`,
+    await run(`UPDATE payment_intents SET provider_state = ?, failure_reason = ?, updated_at = ? WHERE id = ?`,
       params.event, `Reconciliation mismatch: provider reported ${params.currency} ${params.amountMinor / 100}, authorized ${intent.currency} ${intent.amount}.`,
       nowIso(), intent.id);
-    audit.record({
+    await audit.record({
       organizationId: params.organizationId, traceId: intent.trace_id,
       action: "PAYMENT_RECONCILIATION_MISMATCH", resourceType: "PAYMENT", resourceId: intent.id,
       decision: "FAILED", reasonCodes: ["RECONCILIATION_MISMATCH"],
@@ -367,16 +367,16 @@ export function reconcileFromWebhook(params: {
       summary: `Webhook for ${params.orderId} reported an amount that does not match the authorized intent.`,
       detail: { intentId: intent.id, expectedMinor, reportedMinor: params.amountMinor },
     });
-    return { matched: true, outcome: "MISMATCH", intent: getIntent(params.organizationId, intent.id) };
+    return { matched: true, outcome: "MISMATCH", intent: await getIntent(params.organizationId, intent.id) };
   }
 
   const failed = params.event === "payment.failed";
   const nextState: PaymentState = failed ? "FAILED" : "RECONCILED";
 
-  run(`UPDATE payment_intents SET state = ?, provider_payment_id = ?, provider_state = ?, updated_at = ? WHERE id = ?`,
+  await run(`UPDATE payment_intents SET state = ?, provider_payment_id = ?, provider_state = ?, updated_at = ? WHERE id = ?`,
     nextState, params.paymentId, params.event, nowIso(), intent.id);
 
-  audit.record({
+  await audit.record({
     organizationId: params.organizationId, traceId: intent.trace_id,
     action: failed ? "PAYMENT_FAILED" : "PAYMENT_RECONCILED",
     resourceType: "PAYMENT", resourceId: intent.id,
@@ -386,23 +386,23 @@ export function reconcileFromWebhook(params: {
   });
 
   if (!failed) {
-    proofService.anchor({
+    await proofService.anchor({
       organizationId: params.organizationId, subjectType: "PAYMENT", subjectId: intent.id,
       payload: { intentId: intent.id, orderId: params.orderId, paymentId: params.paymentId, event: params.event, amountMinor: params.amountMinor },
     }).catch(() => {});
   }
 
-  return { matched: true, outcome: failed ? "FAILED" : "RECONCILED", intent: getIntent(params.organizationId, intent.id) };
+  return { matched: true, outcome: failed ? "FAILED" : "RECONCILED", intent: await getIntent(params.organizationId, intent.id) };
 }
 
 /** Persist every webhook, valid or not. An invalid-signature attempt is itself a signal. */
-export function recordWebhook(input: {
+export async function recordWebhook(input: {
   provider: string; providerEventId: string | null; eventType: string;
   signatureValid: boolean; rawBody: string; paymentIntentId?: string | null; outcome?: string | null;
 }) {
   const id = newId("exec");
   try {
-    run(
+    await run(
       `INSERT INTO webhook_events (id, provider, provider_event_id, event_type, signature_valid, payload_json, payment_intent_id, processed_at, outcome, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`,
       id, input.provider, input.providerEventId, input.eventType, input.signatureValid ? 1 : 0,
@@ -416,13 +416,13 @@ export function recordWebhook(input: {
   }
 }
 
-export function listWebhooks(limit = 100) {
-  return many<any>(`SELECT * FROM webhook_events ORDER BY created_at DESC LIMIT ?`, limit);
+export async function listWebhooks(limit = 100) {
+  return await many<any>(`SELECT * FROM webhook_events ORDER BY created_at DESC LIMIT ?`, limit);
 }
 
 /** Intents that executed but never reconciled — the operator's stuck-payment queue. */
-export function unreconciled(organizationId: string) {
-  return many<any>(
+export async function unreconciled(organizationId: string) {
+  return await many<any>(
     `SELECT * FROM payment_intents WHERE organization_id = ? AND state IN ('EXECUTING','EXECUTED') ORDER BY created_at ASC`,
     organizationId,
   );

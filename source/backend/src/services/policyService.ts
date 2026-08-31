@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { computePolicyHash } from "../core/hash.js";
@@ -74,31 +74,31 @@ export function detectConflicts(rules: PolicyRule[]): string[] {
   return warnings;
 }
 
-export function listPolicies(organizationId: string, opts: { policyKey?: string; status?: string; includeAllVersions?: boolean } = {}) {
+export async function listPolicies(organizationId: string, opts: { policyKey?: string; status?: string; includeAllVersions?: boolean } = {}) {
   const where = ["organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.policyKey) { where.push("policy_key = ?"); params.push(opts.policyKey); }
   if (opts.status) { where.push("status = ?"); params.push(opts.status); }
-  const rows = many<any>(`SELECT * FROM policies WHERE ${where.join(" AND ")} ORDER BY policy_key, version DESC`, ...params);
+  const rows = await many<any>(`SELECT * FROM policies WHERE ${where.join(" AND ")} ORDER BY policy_key, version DESC`, ...params);
   if (opts.includeAllVersions) return rows;
   const seen = new Set<string>();
   return rows.filter((r) => (seen.has(r.policy_key) ? false : (seen.add(r.policy_key), true)));
 }
 
-export function getPolicy(organizationId: string, id: string) {
-  return one<any>(`SELECT * FROM policies WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getPolicy(organizationId: string, id: string) {
+  return await one<any>(`SELECT * FROM policies WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
-export function policyVersions(organizationId: string, policyKey: string) {
-  return many<any>(`SELECT * FROM policies WHERE organization_id = ? AND policy_key = ? ORDER BY version DESC`, organizationId, policyKey);
+export async function policyVersions(organizationId: string, policyKey: string) {
+  return await many<any>(`SELECT * FROM policies WHERE organization_id = ? AND policy_key = ? ORDER BY version DESC`, organizationId, policyKey);
 }
 
-export function createPolicy(organizationId: string, actorId: string, input: {
+export async function createPolicy(organizationId: string, actorId: string, input: {
   policyKey: string; name: string; description?: string;
   conditions: { rules: unknown }; appliesTo?: unknown; activate?: boolean;
 }) {
   const rules = validateRules(input.conditions?.rules ?? []);
-  if (one(`SELECT id FROM policies WHERE organization_id = ? AND policy_key = ? AND version = 1`, organizationId, input.policyKey)) {
+  if (await one(`SELECT id FROM policies WHERE organization_id = ? AND policy_key = ? AND version = 1`, organizationId, input.policyKey)) {
     throw conflict("POLICY_EXISTS", `Policy key "${input.policyKey}" already exists. Create a new version instead.`);
   }
   const id = newId("pol");
@@ -106,20 +106,20 @@ export function createPolicy(organizationId: string, actorId: string, input: {
   const hash = computePolicyHash({ id: input.policyKey, version: 1, conditions });
   const ts = nowIso();
 
-  run(`INSERT INTO policies (id, organization_id, policy_key, name, description, version, conditions_json, applies_to_json, status, hash, created_by, created_at, activated_at)
+  await run(`INSERT INTO policies (id, organization_id, policy_key, name, description, version, conditions_json, applies_to_json, status, hash, created_by, created_at, activated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, organizationId, input.policyKey, input.name, input.description ?? "", 1,
     j.enc(conditions), j.enc(input.appliesTo ?? {}),
     input.activate ? "ACTIVE" : "DRAFT", hash, actorId, ts, input.activate ? ts : null);
 
-  return { policy: getPolicy(organizationId, id)!, warnings: detectConflicts(rules) };
+  return { policy: await getPolicy(organizationId, id)!, warnings: detectConflicts(rules) };
 }
 
 /** Create the next version of an existing policy. Never mutates the current one. */
-export function createVersion(organizationId: string, actorId: string, policyKey: string, input: {
+export async function createVersion(organizationId: string, actorId: string, policyKey: string, input: {
   name?: string; description?: string; conditions: { rules: unknown }; appliesTo?: unknown; activate?: boolean;
 }) {
-  const versions = policyVersions(organizationId, policyKey);
+  const versions = await policyVersions(organizationId, policyKey);
   if (versions.length === 0) throw notFound("Policy not found.");
   const latest = versions[0];
   const rules = validateRules(input.conditions?.rules ?? []);
@@ -129,39 +129,39 @@ export function createVersion(organizationId: string, actorId: string, policyKey
   const id = newId("pol");
   const ts = nowIso();
 
-  tx(() => {
-    run(`INSERT INTO policies (id, organization_id, policy_key, name, description, version, conditions_json, applies_to_json, status, hash, created_by, created_at, activated_at)
+  await tx(async () => {
+    await run(`INSERT INTO policies (id, organization_id, policy_key, name, description, version, conditions_json, applies_to_json, status, hash, created_by, created_at, activated_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, organizationId, policyKey, input.name ?? latest.name, input.description ?? latest.description,
       nextVersion, j.enc(conditions), j.enc(input.appliesTo ?? j.dec(latest.applies_to_json, {})),
       input.activate ? "ACTIVE" : "DRAFT", hash, actorId, ts, input.activate ? ts : null);
 
     if (input.activate) {
-      run(`UPDATE policies SET status = 'SUPERSEDED' WHERE organization_id = ? AND policy_key = ? AND id != ? AND status = 'ACTIVE'`,
+      await run(`UPDATE policies SET status = 'SUPERSEDED' WHERE organization_id = ? AND policy_key = ? AND id != ? AND status = 'ACTIVE'`,
         organizationId, policyKey, id);
     }
   });
 
-  return { policy: getPolicy(organizationId, id)!, warnings: detectConflicts(rules) };
+  return { policy: await getPolicy(organizationId, id)!, warnings: detectConflicts(rules) };
 }
 
-export function activatePolicy(organizationId: string, id: string) {
-  const policy = getPolicy(organizationId, id);
+export async function activatePolicy(organizationId: string, id: string) {
+  const policy = await getPolicy(organizationId, id);
   if (!policy) throw notFound("Policy version not found.");
   if (policy.status === "ACTIVE") return policy;
-  tx(() => {
-    run(`UPDATE policies SET status = 'SUPERSEDED' WHERE organization_id = ? AND policy_key = ? AND status = 'ACTIVE'`,
+  await tx(async () => {
+    await run(`UPDATE policies SET status = 'SUPERSEDED' WHERE organization_id = ? AND policy_key = ? AND status = 'ACTIVE'`,
       organizationId, policy.policy_key);
-    run(`UPDATE policies SET status = 'ACTIVE', activated_at = ? WHERE id = ?`, nowIso(), id);
+    await run(`UPDATE policies SET status = 'ACTIVE', activated_at = ? WHERE id = ?`, nowIso(), id);
   });
-  return getPolicy(organizationId, id)!;
+  return await getPolicy(organizationId, id)!;
 }
 
-export function disablePolicy(organizationId: string, id: string) {
-  const policy = getPolicy(organizationId, id);
+export async function disablePolicy(organizationId: string, id: string) {
+  const policy = await getPolicy(organizationId, id);
   if (!policy) throw notFound("Policy version not found.");
-  run(`UPDATE policies SET status = 'DISABLED' WHERE id = ?`, id);
-  return getPolicy(organizationId, id)!;
+  await run(`UPDATE policies SET status = 'DISABLED' WHERE id = ?`, id);
+  return await getPolicy(organizationId, id)!;
 }
 
 export function toApi(row: any) {
@@ -177,8 +177,8 @@ export function toApi(row: any) {
 }
 
 /** Decision history for a policy — which authorizations cited it, and how they went. */
-export function decisionHistory(organizationId: string, policyId: string, limit = 50) {
-  return many<any>(
+export async function decisionHistory(organizationId: string, policyId: string, limit = 50) {
+  return await many<any>(
     `SELECT id, seq, action, resource_type, resource_id, decision, reason_codes, actor_did, timestamp
      FROM audit_events WHERE organization_id = ? AND policy_id = ? ORDER BY seq DESC LIMIT ?`,
     organizationId, policyId, limit,

@@ -3,12 +3,16 @@ import { TASK_COMPILE_SOLIDITY_GET_SOLC_BUILD } from "hardhat/builtin-tasks/task
 import path from "node:path";
 import fs from "node:fs";
 import "@nomicfoundation/hardhat-toolbox-viem";
+import * as dotenv from "dotenv";
+
+dotenv.config();
 
 const SOLC_VERSION = "0.8.24";
 const SOLC_LONG_VERSION = "0.8.24+commit.e11b9ed9";
 
 const CHAIN_RPC_URL = process.env.CHAIN_RPC_URL ?? "";
 const CHAIN_PRIVATE_KEY = process.env.CHAIN_PRIVATE_KEY ?? "";
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY ?? "";
 
 /**
  * Use the locally installed `solc` package instead of downloading a compiler binary.
@@ -50,6 +54,9 @@ const config: HardhatUserConfig = {
     ...(CHAIN_RPC_URL && CHAIN_PRIVATE_KEY
       ? { sepolia: { url: CHAIN_RPC_URL, accounts: [CHAIN_PRIVATE_KEY] } }
       : {}),
+  },
+  etherscan: {
+    apiKey: ETHERSCAN_API_KEY,
   },
 };
 

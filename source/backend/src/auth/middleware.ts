@@ -26,9 +26,9 @@ declare module "fastify" {
 export async function attachActor(request: FastifyRequest) {
   const agentKey = request.headers["x-agent-key"];
   if (typeof agentKey === "string" && agentKey.length > 0) {
-    const resolved = resolveAgentToken(agentKey);
+    const resolved = await resolveAgentToken(agentKey); // Note: Might be async now or soon
     if (resolved) {
-      const actor = buildActorContext(resolved.identityId, resolved.organizationId);
+      const actor = await buildActorContext(resolved.identityId, resolved.organizationId);
       if (actor) request.actor = actor;
     }
     return;
@@ -37,7 +37,7 @@ export async function attachActor(request: FastifyRequest) {
   const header = request.headers.authorization;
   if (typeof header === "string" && header.startsWith("Bearer ")) {
     const token = header.slice(7).trim();
-    const actor = resolveActorFromToken(token);
+    const actor = await resolveActorFromToken(token);
     if (actor) request.actor = actor;
   }
 }

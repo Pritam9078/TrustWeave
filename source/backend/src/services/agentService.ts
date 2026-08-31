@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { randomHex, sha256Hex, hashObject } from "../core/hash.js";
@@ -35,8 +35,8 @@ export interface RegisterAgentInput {
   limits?: AgentLimits;
 }
 
-export function listAgents(organizationId: string) {
-  const rows = many<any>(
+export async function listAgents(organizationId: string) {
+  const rows = await many<any>(
     `SELECT a.*, i.did, i.status AS identity_status, d.name AS department_name, o.display_name AS owner_name
      FROM agents a
      JOIN identities i ON i.id = a.identity_id
@@ -48,8 +48,8 @@ export function listAgents(organizationId: string) {
   return rows.map((r) => ({ ...r, capabilities: agentCapabilities(r.id), tools: agentTools(r.id), scopeIds: agentScopeIds(r.id) }));
 }
 
-export function getAgent(organizationId: string, id: string) {
-  const row = one<any>(
+export async function getAgent(organizationId: string, id: string) {
+  const row = await one<any>(
     `SELECT a.*, i.did, i.status AS identity_status, d.name AS department_name, o.display_name AS owner_name
      FROM agents a
      JOIN identities i ON i.id = a.identity_id
@@ -62,30 +62,30 @@ export function getAgent(organizationId: string, id: string) {
   return { ...row, capabilities: agentCapabilities(id), tools: agentTools(id), scopeIds: agentScopeIds(id) };
 }
 
-export function agentCapabilities(agentId: string): string[] {
-  return many<{ action: string }>(
+export async function agentCapabilities(agentId: string): Promise<string[]>{
+  return (await many<{ action: string }>(
     `SELECT c.action FROM capabilities c JOIN agent_capabilities ac ON ac.capability_id = c.id WHERE ac.agent_id = ? ORDER BY c.action`,
     agentId,
-  ).map((r) => r.action);
+  )).map((r: any) => r.action);
 }
 
-export function agentTools(agentId: string): string[] {
-  return many<{ tool_name: string }>(`SELECT tool_name FROM agent_tools WHERE agent_id = ? ORDER BY tool_name`, agentId).map((r) => r.tool_name);
+export async function agentTools(agentId: string): Promise<string[]>{
+  return (await many<{ tool_name: string }>(`SELECT tool_name FROM agent_tools WHERE agent_id = ? ORDER BY tool_name`, agentId)).map((r: any) => r.tool_name);
 }
 
-export function agentScopeIds(agentId: string): string[] {
-  return many<{ scope_id: string }>(`SELECT scope_id FROM agent_scopes WHERE agent_id = ?`, agentId).map((r) => r.scope_id);
+export async function agentScopeIds(agentId: string): Promise<string[]>{
+  return (await many<{ scope_id: string }>(`SELECT scope_id FROM agent_scopes WHERE agent_id = ?`, agentId)).map((r: any) => r.scope_id);
 }
 
 export async function registerAgent(actor: ActorContext, input: RegisterAgentInput) {
-  if (one(`SELECT id FROM agents WHERE organization_id = ? AND name = ?`, actor.organizationId, input.name)) {
+  if (await one(`SELECT id FROM agents WHERE organization_id = ? AND name = ?`, actor.organizationId, input.name)) {
     throw conflict("AGENT_EXISTS", `An agent named "${input.name}" already exists.`);
   }
   validateGrants(input.capabilities ?? [], input.tools ?? []);
 
   // The agent gets its own DID and its own identity row. Reusing a human's identity
   // would make it impossible to attribute an action to the agent rather than its owner.
-  const { identity } = createIdentity({
+  const { identity } = await createIdentity({
     organizationId: actor.organizationId,
     displayName: input.name,
     kind: "AGENT",
@@ -98,8 +98,8 @@ export async function registerAgent(actor: ActorContext, input: RegisterAgentInp
   const ts = nowIso();
   const limits = input.limits ?? {};
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `INSERT INTO agents (id, organization_id, identity_id, name, owner_identity_id, department_id, status, limits_json, token_hash, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       agentId, actor.organizationId, identity.id, input.name,
@@ -107,13 +107,13 @@ export async function registerAgent(actor: ActorContext, input: RegisterAgentInp
       "ACTIVE", j.enc(limits), sha256Hex(token), ts, ts,
     );
     for (const action of input.capabilities ?? []) {
-      run(`INSERT OR IGNORE INTO agent_capabilities (agent_id, capability_id) VALUES (?,?)`, agentId, capabilityId(action));
+      await run(`INSERT INTO agent_capabilities (agent_id, capability_id) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, capabilityId(action));
     }
     for (const scopeId of input.scopeIds ?? []) {
-      run(`INSERT OR IGNORE INTO agent_scopes (agent_id, scope_id) VALUES (?,?)`, agentId, scopeId);
+      await run(`INSERT INTO agent_scopes (agent_id, scope_id) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, scopeId);
     }
     for (const tool of input.tools ?? []) {
-      run(`INSERT OR IGNORE INTO agent_tools (agent_id, tool_name) VALUES (?,?)`, agentId, tool);
+      await run(`INSERT INTO agent_tools (agent_id, tool_name) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, tool);
     }
   });
 
@@ -127,43 +127,43 @@ export async function registerAgent(actor: ActorContext, input: RegisterAgentInp
       policyCommitment: "0x" + hashObject({ capabilities: input.capabilities ?? [], limits }).replace(/^sha256:/, ""),
     });
     chainTx = receipt.txHash;
-    run(`UPDATE agents SET chain_tx_hash = ? WHERE id = ?`, chainTx, agentId);
+    await run(`UPDATE agents SET chain_tx_hash = ? WHERE id = ?`, chainTx, agentId);
   } catch { /* registration succeeds regardless; the chain write is retryable from the UI */ }
 
   // The token is returned exactly once and only its hash is stored.
   return { agent: getAgent(actor.organizationId, agentId)!, token };
 }
 
-function validateGrants(capabilities: string[], tools: string[]) {
+async function validateGrants(capabilities: string[], tools: string[]) {
   const unknownCaps = capabilities.filter((c) => !isKnownCapability(c));
   if (unknownCaps.length) throw badRequest("CAPABILITY_UNKNOWN", `Unknown capabilities: ${unknownCaps.join(", ")}`);
   const unknownTools = tools.filter((t) => !ALLOWED_TOOLS.includes(t));
   if (unknownTools.length) throw badRequest("TOOL_UNKNOWN", `Unknown tools: ${unknownTools.join(", ")}. Known: ${ALLOWED_TOOLS.join(", ")}`);
 }
 
-export function configureAgent(organizationId: string, agentId: string, patch: {
+export async function configureAgent(organizationId: string, agentId: string, patch: {
   capabilities?: string[]; scopeIds?: string[]; tools?: string[]; limits?: AgentLimits; departmentId?: string | null;
 }) {
-  const agent = getAgent(organizationId, agentId);
+  const agent = await getAgent(organizationId, agentId);
   if (!agent) throw notFound("Agent not found.");
   validateGrants(patch.capabilities ?? [], patch.tools ?? []);
 
-  tx(() => {
+  await tx(async () => {
     if (patch.capabilities) {
-      run(`DELETE FROM agent_capabilities WHERE agent_id = ?`, agentId);
-      for (const a of patch.capabilities) run(`INSERT OR IGNORE INTO agent_capabilities (agent_id, capability_id) VALUES (?,?)`, agentId, capabilityId(a));
+      await run(`DELETE FROM agent_capabilities WHERE agent_id = ?`, agentId);
+      for (const a of patch.capabilities) await run(`INSERT INTO agent_capabilities (agent_id, capability_id) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, capabilityId(a));
     }
     if (patch.scopeIds) {
-      run(`DELETE FROM agent_scopes WHERE agent_id = ?`, agentId);
-      for (const s of patch.scopeIds) run(`INSERT OR IGNORE INTO agent_scopes (agent_id, scope_id) VALUES (?,?)`, agentId, s);
+      await run(`DELETE FROM agent_scopes WHERE agent_id = ?`, agentId);
+      for (const s of patch.scopeIds) await run(`INSERT INTO agent_scopes (agent_id, scope_id) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, s);
     }
     if (patch.tools) {
-      run(`DELETE FROM agent_tools WHERE agent_id = ?`, agentId);
-      for (const t of patch.tools) run(`INSERT OR IGNORE INTO agent_tools (agent_id, tool_name) VALUES (?,?)`, agentId, t);
+      await run(`DELETE FROM agent_tools WHERE agent_id = ?`, agentId);
+      for (const t of patch.tools) await run(`INSERT INTO agent_tools (agent_id, tool_name) VALUES (?,?) ON CONFLICT DO NOTHING`, agentId, t);
     }
-    if (patch.limits) run(`UPDATE agents SET limits_json = ? WHERE id = ?`, j.enc(patch.limits), agentId);
-    if (patch.departmentId !== undefined) run(`UPDATE agents SET department_id = ? WHERE id = ?`, patch.departmentId, agentId);
-    run(`UPDATE agents SET updated_at = ? WHERE id = ?`, nowIso(), agentId);
+    if (patch.limits) await run(`UPDATE agents SET limits_json = ? WHERE id = ?`, j.enc(patch.limits), agentId);
+    if (patch.departmentId !== undefined) await run(`UPDATE agents SET department_id = ? WHERE id = ?`, patch.departmentId, agentId);
+    await run(`UPDATE agents SET updated_at = ? WHERE id = ?`, nowIso(), agentId);
   });
 
   return getAgent(organizationId, agentId)!;
@@ -176,20 +176,20 @@ export function configureAgent(organizationId: string, agentId: string, patch: {
  * the freeze.
  */
 export async function setAgentStatus(organizationId: string, agentId: string, status: "ACTIVE" | "FROZEN" | "REVOKED", actorId: string, reason: string) {
-  const agent = getAgent(organizationId, agentId);
+  const agent = await getAgent(organizationId, agentId);
   if (!agent) throw notFound("Agent not found.");
-  if (agent.status === "REVOKED") throw badRequest("AGENT_REVOKED", "A revoked agent cannot be reactivated.");
+  if ((await agent).status === "REVOKED") throw badRequest("AGENT_REVOKED", "A revoked agent cannot be reactivated.");
 
   const ts = nowIso();
-  tx(() => {
-    run(`UPDATE agents SET status = ?, freeze_reason = ?, frozen_by = ?, frozen_at = ?, updated_at = ? WHERE id = ?`,
+  await tx(async () => {
+    await run(`UPDATE agents SET status = ?, freeze_reason = ?, frozen_by = ?, frozen_at = ?, updated_at = ? WHERE id = ?`,
       status, status === "ACTIVE" ? null : reason, status === "ACTIVE" ? null : actorId,
       status === "ACTIVE" ? null : ts, ts, agentId);
     if (status === "REVOKED") {
       // Revocation is terminal: the underlying identity dies with the agent, so the
       // credential stops resolving at the door.
-      run(`UPDATE identities SET status = 'REVOKED', updated_at = ? WHERE id = ?`, ts, agent.identity_id);
-      revokeAllSessionsFor(agent.identity_id);
+      await run(`UPDATE identities SET status = await 'REVOKED', updated_at = ? WHERE id = ?`, ts, (await agent).identity_id);
+      revokeAllSessionsFor((await agent).identity_id);
     } else if (status === "FROZEN") {
       // A freeze deliberately leaves the identity ACTIVE. The credential still resolves,
       // so the authorization engine gets to run and record an explicit AGENT_FROZEN
@@ -197,9 +197,9 @@ export async function setAgentStatus(organizationId: string, agentId: string, st
       // the call one layer earlier and leave the audit trail saying only "inactive
       // identity" — losing which tool the frozen agent reached for, which is exactly the
       // forensic detail an incident review needs.
-      revokeAllSessionsFor(agent.identity_id);
+      revokeAllSessionsFor((await agent).identity_id);
     } else {
-      run(`UPDATE identities SET status = 'ACTIVE', updated_at = ? WHERE id = ?`, ts, agent.identity_id);
+      await run(`UPDATE identities SET status = 'ACTIVE', updated_at = ? WHERE id = ?`, ts, (await agent).identity_id);
     }
   });
 
@@ -211,25 +211,25 @@ export async function setAgentStatus(organizationId: string, agentId: string, st
 }
 
 /** Resolve an agent bearer token to its identity. Constant-work lookup on the hash. */
-export function resolveAgentToken(token: string): { agentId: string; identityId: string; organizationId: string } | null {
-  const row = one<any>(`SELECT id, identity_id, organization_id, status FROM agents WHERE token_hash = ?`, sha256Hex(token));
+export async function resolveAgentToken(token: string): Promise<{ agentId: string; identityId: string; organizationId: string; } | null> {
+  const row = await one<any>(`SELECT id, identity_id, organization_id, status FROM agents WHERE token_hash = ?`, sha256Hex(token));
   if (!row) return null;
   return { agentId: row.id, identityId: row.identity_id, organizationId: row.organization_id };
 }
 
-export function rotateToken(organizationId: string, agentId: string) {
-  const agent = getAgent(organizationId, agentId);
+export async function rotateToken(organizationId: string, agentId: string) {
+  const agent = await getAgent(organizationId, agentId);
   if (!agent) throw notFound("Agent not found.");
   const token = `apk_${randomHex(24)}`;
-  run(`UPDATE agents SET token_hash = ?, updated_at = ? WHERE id = ?`, sha256Hex(token), nowIso(), agentId);
+  await run(`UPDATE agents SET token_hash = ?, updated_at = ? WHERE id = ?`, sha256Hex(token), nowIso(), agentId);
   return { token };
 }
 
-export function toolCallHistory(agentId: string, limit = 100) {
-  return many<any>(`SELECT * FROM agent_tool_calls WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`, agentId, limit);
+export async function toolCallHistory(agentId: string, limit = 100) {
+  return await many<any>(`SELECT * FROM agent_tool_calls WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`, agentId, limit);
 }
 
-export function toApi(row: any) {
+export async function toApi(row: any) {
   return {
     id: row.id, name: row.name, did: row.did, status: row.status,
     identityId: row.identity_id, identityStatus: row.identity_status,

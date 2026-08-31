@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso, plusMinutes, isExpired } from "../core/time.js";
 import { sha256Hex, randomHex, safeEqual } from "../core/hash.js";
@@ -33,7 +33,7 @@ export interface CreateIdentityInput {
   password?: string;
 }
 
-export function createIdentity(input: CreateIdentityInput) {
+export async function createIdentity(input: CreateIdentityInput) {
   let did = input.did;
   let publicKey = input.publicKey ?? null;
   let generated: { privateKeyB64: string } | null = null;
@@ -50,52 +50,52 @@ export function createIdentity(input: CreateIdentityInput) {
     generated = { privateKeyB64: kp.privateKeyB64 };
   }
 
-  if (one(`SELECT id FROM identities WHERE did = ?`, did)) {
+  if (await one(`SELECT id FROM identities WHERE did = ?`, did)) {
     throw conflict("DID_EXISTS", "An identity with this DID already exists.");
   }
 
   const id = newId("idn");
   const ts = nowIso();
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `INSERT INTO identities (id, organization_id, did, public_key, kind, display_name, email, status, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`,
       id, input.organizationId, did, publicKey, input.kind ?? "HUMAN",
       input.displayName, input.email ?? null, input.status ?? "ACTIVE", ts, ts,
     );
-    run(
+    await run(
       `INSERT INTO memberships (id, identity_id, organization_id, department_id, status, created_at)
        VALUES (?,?,?,?,?,?)`,
       newId("mem"), id, input.organizationId, input.departmentId ?? null, "ACTIVE", ts,
     );
     if (input.password) {
       const { hash, salt } = hashPassword(input.password);
-      run(
+      await run(
         `INSERT INTO credentials (identity_id, password_hash, salt, algo, updated_at) VALUES (?,?,?,?,?)`,
         id, hash, salt, "scrypt", ts,
       );
     }
   });
 
-  return { identity: getIdentity(input.organizationId, id)!, privateKey: generated?.privateKeyB64 ?? null };
+  return { identity: await getIdentity(input.organizationId, id)!, privateKey: generated?.privateKeyB64 ?? null };
 }
 
-export function getIdentity(organizationId: string, id: string) {
-  return one<any>(`SELECT * FROM identities WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getIdentity(organizationId: string, id: string) {
+  return await one<any>(`SELECT * FROM identities WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
-export function getIdentityByDid(did: string) {
-  return one<any>(`SELECT * FROM identities WHERE did = ?`, did);
+export async function getIdentityByDid(did: string) {
+  return await one<any>(`SELECT * FROM identities WHERE did = ?`, did);
 }
 
-export function listIdentities(organizationId: string, opts: { q?: string; status?: string; kind?: string } = {}) {
+export async function listIdentities(organizationId: string, opts: { q?: string; status?: string; kind?: string } = {}) {
   const where = ["organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.status) { where.push("status = ?"); params.push(opts.status); }
   if (opts.kind) { where.push("kind = ?"); params.push(opts.kind); }
   if (opts.q) { where.push("(display_name LIKE ? OR email LIKE ? OR did LIKE ?)"); params.push(`%${opts.q}%`, `%${opts.q}%`, `%${opts.q}%`); }
-  return many<any>(`SELECT * FROM identities WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 500`, ...params);
+  return await many<any>(`SELECT * FROM identities WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 500`, ...params);
 }
 
 /**
@@ -103,49 +103,49 @@ export function listIdentities(organizationId: string, opts: { q?: string; statu
  * would only take effect when their current session happened to expire — the SRD calls
  * this out explicitly, and it is the difference between a real suspend and a cosmetic one.
  */
-export function setIdentityStatus(organizationId: string, id: string, status: string) {
-  const identity = getIdentity(organizationId, id);
+export async function setIdentityStatus(organizationId: string, id: string, status: string) {
+  const identity = await getIdentity(organizationId, id);
   if (!identity) throw notFound("Identity not found.");
   const ts = nowIso();
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `UPDATE identities SET status = ?, updated_at = ?, revoked_at = ? WHERE id = ?`,
       status, ts, status === "REVOKED" ? ts : identity.revoked_at, id,
     );
     if (status !== "ACTIVE") {
-      run(`UPDATE sessions SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL`, ts, id);
+      await run(`UPDATE sessions SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL`, ts, id);
     }
   });
-  return getIdentity(organizationId, id)!;
+  return await getIdentity(organizationId, id)!;
 }
 
 /* ---------------------------------------------------------------- memberships */
 
-export function getMembership(identityId: string, organizationId: string) {
-  return one<any>(`SELECT * FROM memberships WHERE identity_id = ? AND organization_id = ?`, identityId, organizationId);
+export async function getMembership(identityId: string, organizationId: string) {
+  return await one<any>(`SELECT * FROM memberships WHERE identity_id = ? AND organization_id = ?`, identityId, organizationId);
 }
 
-export function setMembershipDepartment(membershipId: string, departmentId: string | null) {
-  run(`UPDATE memberships SET department_id = ? WHERE id = ?`, departmentId, membershipId);
+export async function setMembershipDepartment(membershipId: string, departmentId: string | null) {
+  await run(`UPDATE memberships SET department_id = ? WHERE id = ?`, departmentId, membershipId);
 }
 
-export function assignRole(membershipId: string, roleId: string, assignedBy: string) {
-  run(
-    `INSERT OR IGNORE INTO membership_roles (membership_id, role_id, assigned_by, assigned_at) VALUES (?,?,?,?)`,
+export async function assignRole(membershipId: string, roleId: string, assignedBy: string) {
+  await run(
+    `INSERT INTO membership_roles (membership_id, role_id, assigned_by, assigned_at) VALUES (?,?,?,?) ON CONFLICT DO NOTHING`,
     membershipId, roleId, assignedBy, nowIso(),
   );
 }
 
-export function removeRole(membershipId: string, roleId: string) {
-  run(`DELETE FROM membership_roles WHERE membership_id = ? AND role_id = ?`, membershipId, roleId);
+export async function removeRole(membershipId: string, roleId: string) {
+  await run(`DELETE FROM membership_roles WHERE membership_id = ? AND role_id = ?`, membershipId, roleId);
 }
 
-export function assignScopeToMembership(membershipId: string, scopeId: string) {
-  run(`INSERT OR IGNORE INTO membership_scopes (membership_id, scope_id) VALUES (?,?)`, membershipId, scopeId);
+export async function assignScopeToMembership(membershipId: string, scopeId: string) {
+  await run(`INSERT INTO membership_scopes (membership_id, scope_id) VALUES (?,?) ON CONFLICT DO NOTHING`, membershipId, scopeId);
 }
 
-export function removeScopeFromMembership(membershipId: string, scopeId: string) {
-  run(`DELETE FROM membership_scopes WHERE membership_id = ? AND scope_id = ?`, membershipId, scopeId);
+export async function removeScopeFromMembership(membershipId: string, scopeId: string) {
+  await run(`DELETE FROM membership_scopes WHERE membership_id = ? AND scope_id = ?`, membershipId, scopeId);
 }
 
 /* ------------------------------------------------- effective permission resolution */
@@ -169,13 +169,13 @@ export interface EffectivePermissions {
  * directly (union). The union is what lets two people share a "Manager" role while being
  * confined to different departments, without minting a role per department.
  */
-export function effectivePermissions(identityId: string, organizationId: string): EffectivePermissions | null {
-  const identity = one<any>(`SELECT * FROM identities WHERE id = ? AND organization_id = ?`, identityId, organizationId);
+export async function effectivePermissions(identityId: string, organizationId: string): Promise<EffectivePermissions | null> {
+  const identity = await one<any>(`SELECT * FROM identities WHERE id = ? AND organization_id = ?`, identityId, organizationId);
   if (!identity) return null;
-  const membership = getMembership(identityId, organizationId);
+  const membership = await getMembership(identityId, organizationId);
   if (!membership) return null;
 
-  const roles = many<{ id: string; name: string }>(
+  const roles = await many<{ id: string; name: string }>(
     `SELECT r.id, r.name FROM roles r
      JOIN membership_roles mr ON mr.role_id = r.id
      WHERE mr.membership_id = ?`,
@@ -183,16 +183,16 @@ export function effectivePermissions(identityId: string, organizationId: string)
   );
 
   const capabilities = roles.length
-    ? many<{ action: string }>(
+    ? (await many<{ action: string }>(
         `SELECT DISTINCT c.action FROM capabilities c
          JOIN role_capabilities rc ON rc.capability_id = c.id
          JOIN membership_roles mr ON mr.role_id = rc.role_id
          WHERE mr.membership_id = ?`,
         membership.id,
-      ).map((r) => r.action)
+      )).map((r) => r.action)
     : [];
 
-  const scopes = many<{ id: string; name: string; scope_type: string }>(
+  const scopes = await many<{ id: string; name: string; scope_type: string }>(
     `SELECT DISTINCT s.id, s.name, s.scope_type FROM scopes s
      WHERE s.id IN (
        SELECT scope_id FROM role_scopes WHERE role_id IN (SELECT role_id FROM membership_roles WHERE membership_id = ?)
@@ -217,14 +217,14 @@ export function effectivePermissions(identityId: string, organizationId: string)
 
 export interface SessionIssue { token: string; sessionId: string; expiresAt: string; }
 
-export function issueSession(identityId: string, organizationId: string, meta: { ip?: string | null; userAgent?: string | null } = {}): SessionIssue {
+export async function issueSession(identityId: string, organizationId: string, meta: { ip?: string | null; userAgent?: string | null } = {}): Promise<SessionIssue> {
   const token = randomHex(32);
   const id = newId("sess");
   const issuedAt = nowIso();
   const expiresAt = plusMinutes(env.SESSION_TTL_MINUTES);
-  const snapshot = effectivePermissions(identityId, organizationId);
+  const snapshot = await effectivePermissions(identityId, organizationId);
 
-  run(
+  await run(
     `INSERT INTO sessions (id, identity_id, organization_id, token_hash, snapshot_json, issued_at, expires_at, user_agent, ip)
      VALUES (?,?,?,?,?,?,?,?,?)`,
     id, identityId, organizationId, sha256Hex(token), j.enc(snapshot),
@@ -233,12 +233,12 @@ export function issueSession(identityId: string, organizationId: string, meta: {
   return { token, sessionId: id, expiresAt };
 }
 
-export function revokeSession(sessionId: string) {
-  run(`UPDATE sessions SET revoked_at = ? WHERE id = ?`, nowIso(), sessionId);
+export async function revokeSession(sessionId: string) {
+  await run(`UPDATE sessions SET revoked_at = ? WHERE id = ?`, nowIso(), sessionId);
 }
 
-export function revokeAllSessionsFor(identityId: string) {
-  run(`UPDATE sessions SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL`, nowIso(), identityId);
+export async function revokeAllSessionsFor(identityId: string) {
+  await run(`UPDATE sessions SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL`, nowIso(), identityId);
 }
 
 /**
@@ -249,21 +249,21 @@ export function revokeAllSessionsFor(identityId: string) {
  * can show what changed since sign-in. Trusting a cached snapshot would mean a role
  * revoked five minutes ago still worked until the session expired.
  */
-export function resolveActorFromToken(token: string): ActorContext | null {
+export async function resolveActorFromToken(token: string): Promise<ActorContext | null> {
   const tokenHash = sha256Hex(token);
-  const session = one<any>(`SELECT * FROM sessions WHERE token_hash = ?`, tokenHash);
+  const session = await one<any>(`SELECT * FROM sessions WHERE token_hash = ?`, tokenHash);
   if (!session) return null;
   if (session.revoked_at) return null;
   if (isExpired(session.expires_at)) return null;
   if (!safeEqual(session.token_hash, tokenHash)) return null;
 
-  return buildActorContext(session.identity_id, session.organization_id);
+  return await buildActorContext(session.identity_id, session.organization_id);
 }
 
-export function buildActorContext(identityId: string, organizationId: string): ActorContext | null {
-  const perms = effectivePermissions(identityId, organizationId);
+export async function buildActorContext(identityId: string, organizationId: string): Promise<ActorContext | null> {
+  const perms = await effectivePermissions(identityId, organizationId);
   if (!perms) return null;
-  const identity = one<any>(`SELECT * FROM identities WHERE id = ?`, identityId);
+  const identity = await one<any>(`SELECT * FROM identities WHERE id = ?`, identityId);
   if (!identity) return null;
 
   const actor: ActorContext = {
@@ -281,18 +281,18 @@ export function buildActorContext(identityId: string, organizationId: string): A
   };
 
   if (identity.kind === "AGENT") {
-    const agent = one<any>(`SELECT * FROM agents WHERE identity_id = ?`, identityId);
+    const agent = await one<any>(`SELECT * FROM agents WHERE identity_id = ?`, identityId);
     if (agent) {
       // An agent's capabilities and scopes come from its own grants, not from roles.
       // Union'ing them with role capabilities would let an agent inherit a human's
       // permissions by sharing a membership — the escalation path this avoids.
-      const agentCaps = many<{ action: string }>(
+      const agentCaps = (await many<{ action: string }>(
         `SELECT c.action FROM capabilities c JOIN agent_capabilities ac ON ac.capability_id = c.id WHERE ac.agent_id = ?`,
         agent.id,
-      ).map((r) => r.action);
-      const agentScopes = many<{ scope_id: string }>(`SELECT scope_id FROM agent_scopes WHERE agent_id = ?`, agent.id)
+      )).map((r) => r.action);
+      const agentScopes = (await many<{ scope_id: string }>(`SELECT scope_id FROM agent_scopes WHERE agent_id = ?`, agent.id))
         .map((r) => r.scope_id);
-      const tools = many<{ tool_name: string }>(`SELECT tool_name FROM agent_tools WHERE agent_id = ?`, agent.id)
+      const tools = (await many<{ tool_name: string }>(`SELECT tool_name FROM agent_tools WHERE agent_id = ?`, agent.id))
         .map((r) => r.tool_name);
 
       actor.capabilities = new Set(agentCaps);
@@ -313,16 +313,16 @@ export function buildActorContext(identityId: string, organizationId: string): A
 /* --------------------------------------------------------- authentication flows */
 
 /** Step 1 of DID auth: hand out a single-use, short-lived nonce. */
-export function createChallenge(did: string) {
+export async function createChallenge(did: string) {
   if (!isValidDid(did)) throw badRequest("INVALID_DID", "Not a valid Ed25519 did:key identifier.");
-  const identity = getIdentityByDid(did);
+  const identity = await getIdentityByDid(did);
   // Deliberately does not reveal whether the DID is registered — an unregistered DID
   // gets a well-formed challenge that will simply fail at verification. Otherwise this
   // endpoint becomes an oracle for enumerating an organization's members.
   const id = newId("chal");
   const nonce = newNonce();
   const created = nowIso();
-  run(
+  await run(
     `INSERT INTO auth_challenges (id, did, nonce, created_at, expires_at) VALUES (?,?,?,?,?)`,
     id, did, nonce, created, new Date(Date.now() + env.CHALLENGE_TTL_SECONDS * 1000).toISOString(),
   );
@@ -330,8 +330,8 @@ export function createChallenge(did: string) {
 }
 
 /** Step 2: verify the signature, consume the nonce, issue a session. */
-export function verifyChallengeAndLogin(params: { challengeId: string; did: string; signature: string; ip?: string | null; userAgent?: string | null }) {
-  const challenge = one<any>(`SELECT * FROM auth_challenges WHERE id = ?`, params.challengeId);
+export async function verifyChallengeAndLogin(params: { challengeId: string; did: string; signature: string; ip?: string | null; userAgent?: string | null }) {
+  const challenge = await one<any>(`SELECT * FROM auth_challenges WHERE id = ?`, params.challengeId);
   if (!challenge) throw unauthorized("Challenge not found.");
   if (challenge.consumed_at) throw unauthorized("This challenge has already been used.");
   if (isExpired(challenge.expires_at)) throw unauthorized("Challenge expired. Request a new one.");
@@ -339,27 +339,27 @@ export function verifyChallengeAndLogin(params: { challengeId: string; did: stri
 
   // Consume before verifying, so a failed attempt burns the nonce too. Otherwise an
   // attacker could grind signatures against one long-lived challenge.
-  run(`UPDATE auth_challenges SET consumed_at = ? WHERE id = ?`, nowIso(), challenge.id);
+  await run(`UPDATE auth_challenges SET consumed_at = ? WHERE id = ?`, nowIso(), challenge.id);
 
   if (!verifyChallenge(params.did, challenge.nonce, params.signature)) {
     throw unauthorized("Signature verification failed.");
   }
 
-  const identity = getIdentityByDid(params.did);
+  const identity = await getIdentityByDid(params.did);
   if (!identity) throw unauthorized("No identity is registered for this DID.");
   if (identity.status !== "ACTIVE") throw forbidden("IDENTITY_INACTIVE", `This identity is ${identity.status}.`);
 
-  const session = issueSession(identity.id, identity.organization_id, { ip: params.ip, userAgent: params.userAgent });
+  const session = await issueSession(identity.id, identity.organization_id, { ip: params.ip, userAgent: params.userAgent });
   return { session, identity };
 }
 
 /** Development-only password path. Refused outright when disabled. */
-export function passwordLogin(params: { email: string; password: string; ip?: string | null; userAgent?: string | null }) {
+export async function passwordLogin(params: { email: string; password: string; ip?: string | null; userAgent?: string | null }) {
   if (!env.ALLOW_PASSWORD_LOGIN) {
     throw forbidden("PASSWORD_LOGIN_DISABLED", "Password login is disabled. Use DID challenge authentication.");
   }
-  const identity = one<any>(`SELECT * FROM identities WHERE email = ? AND kind = 'HUMAN'`, params.email.toLowerCase().trim());
-  const creds = identity ? one<any>(`SELECT * FROM credentials WHERE identity_id = ?`, identity.id) : null;
+  const identity = await one<any>(`SELECT * FROM identities WHERE email = ? AND kind = 'HUMAN'`, params.email.toLowerCase().trim());
+  const creds = identity ? await one<any>(`SELECT * FROM credentials WHERE identity_id = ?`, identity.id) : null;
 
   // Always run a verification, even with no matching identity, so response timing does
   // not distinguish "no such user" from "wrong password".
@@ -370,7 +370,7 @@ export function passwordLogin(params: { email: string; password: string; ip?: st
   if (!identity || !ok) throw unauthorized("Invalid email or password.");
   if (identity.status !== "ACTIVE") throw forbidden("IDENTITY_INACTIVE", `This identity is ${identity.status}.`);
 
-  const session = issueSession(identity.id, identity.organization_id, { ip: params.ip, userAgent: params.userAgent });
+  const session = await issueSession(identity.id, identity.organization_id, { ip: params.ip, userAgent: params.userAgent });
   return { session, identity };
 }
 

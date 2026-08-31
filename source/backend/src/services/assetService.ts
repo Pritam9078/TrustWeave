@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { hashObject } from "../core/hash.js";
@@ -30,7 +30,7 @@ export interface CreateAssetInput {
   ownerDid?: string | null;
 }
 
-export function listAssets(organizationId: string, opts: { status?: string; departmentId?: string; ownerDid?: string; collectionId?: string; q?: string } = {}) {
+export async function listAssets(organizationId: string, opts: { status?: string; departmentId?: string; ownerDid?: string; collectionId?: string; q?: string } = {}) {
   const where = ["a.organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.status) { where.push("a.status = ?"); params.push(opts.status); }
@@ -38,7 +38,7 @@ export function listAssets(organizationId: string, opts: { status?: string; depa
   if (opts.ownerDid) { where.push("a.owner_did = ?"); params.push(opts.ownerDid); }
   if (opts.collectionId) { where.push("a.collection_id = ?"); params.push(opts.collectionId); }
   if (opts.q) { where.push("(a.name LIKE ? OR a.asset_type LIKE ?)"); params.push(`%${opts.q}%`, `%${opts.q}%`); }
-  return many<any>(
+  return await many<any>(
     `SELECT a.*, d.name AS department_name, c.name AS collection_name
      FROM assets a
      LEFT JOIN departments d ON d.id = a.department_id
@@ -48,8 +48,8 @@ export function listAssets(organizationId: string, opts: { status?: string; depa
   );
 }
 
-export function getAsset(organizationId: string, id: string) {
-  return one<any>(
+export async function getAsset(organizationId: string, id: string) {
+  return await one<any>(
     `SELECT a.*, d.name AS department_name, c.name AS collection_name
      FROM assets a
      LEFT JOIN departments d ON d.id = a.department_id
@@ -59,15 +59,15 @@ export function getAsset(organizationId: string, id: string) {
   );
 }
 
-export function assetHistory(assetId: string) {
-  return many<any>(`SELECT * FROM asset_events WHERE asset_id = ? ORDER BY timestamp ASC`, assetId);
+export async function assetHistory(assetId: string) {
+  return await many<any>(`SELECT * FROM asset_events WHERE asset_id = ? ORDER BY timestamp ASC`, assetId);
 }
 
-function recordAssetEvent(input: {
+async function recordAssetEvent(input: {
   assetId: string; eventType: string; fromDid?: string | null; toDid?: string | null;
   actorId: string; traceId: string; txHash?: string | null; detail?: Record<string, unknown>;
 }) {
-  run(
+  await run(
     `INSERT INTO asset_events (id, asset_id, event_type, from_did, to_did, actor_id, trace_id, tx_hash, detail_json, timestamp)
      VALUES (?,?,?,?,?,?,?,?,?,?)`,
     newId("aevt"), input.assetId, input.eventType, input.fromDid ?? null, input.toDid ?? null,
@@ -75,14 +75,14 @@ function recordAssetEvent(input: {
   );
 }
 
-export function createAsset(actor: ActorContext, traceId: string, input: CreateAssetInput) {
+export async function createAsset(actor: ActorContext, traceId: string, input: CreateAssetInput) {
   const metadata = input.metadata ?? {};
   const metadataHash = hashObject(metadata);
   const id = newId("asset");
   const ts = nowIso();
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `INSERT INTO assets (id, organization_id, department_id, collection_id, name, asset_type,
         metadata_ref, metadata_json, metadata_hash, owner_did, status, created_by, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -104,7 +104,7 @@ export function createAsset(actor: ActorContext, traceId: string, input: CreateA
  * database row claiming a token that does not exist on-chain.
  */
 export async function mintAsset(actor: ActorContext, traceId: string, assetId: string) {
-  const asset = getAsset(actor.organizationId, assetId);
+  const asset = await getAsset(actor.organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (asset.nft_token_id) throw conflict("ALREADY_MINTED", "This asset already has an NFT token.");
   if (asset.status === "REVOKED") throw unprocessable("ASSET_REVOKED", "A revoked asset cannot be minted.");
@@ -112,7 +112,7 @@ export async function mintAsset(actor: ActorContext, traceId: string, assetId: s
 
   const chain = getBlockchainAdapter();
   const tokenId = `apt-${assetId}`;
-  const ownerCommitment = didCommitment(asset.owner_did);
+  const ownerCommitment = await didCommitment(asset.owner_did);
 
   const receipt = await chain.mintAsset({
     tokenId,
@@ -120,8 +120,8 @@ export async function mintAsset(actor: ActorContext, traceId: string, assetId: s
     metadataCommitment: "0x" + asset.metadata_hash.replace(/^sha256:/, ""),
   });
 
-  tx(() => {
-    run(`UPDATE assets SET nft_token_id = ?, status = 'ACTIVE', chain_tx_hash = ?, updated_at = ? WHERE id = ?`,
+  await tx(async () => {
+    await run(`UPDATE assets SET nft_token_id = ?, status = 'ACTIVE', chain_tx_hash = ?, updated_at = ? WHERE id = ?`,
       tokenId, receipt.txHash, nowIso(), assetId);
     recordAssetEvent({
       assetId, eventType: "MINTED", actorId: actor.identityId, traceId,
@@ -140,22 +140,22 @@ export async function mintAsset(actor: ActorContext, traceId: string, assetId: s
   return { asset: getAsset(actor.organizationId, assetId)!, receipt };
 }
 
-export function assignAsset(actor: ActorContext, traceId: string, assetId: string, ownerDid: string) {
-  const asset = getAsset(actor.organizationId, assetId);
+export async function assignAsset(actor: ActorContext, traceId: string, assetId: string, ownerDid: string) {
+  const asset = await getAsset(actor.organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (asset.status === "REVOKED") throw unprocessable("ASSET_REVOKED", "A revoked asset cannot be reassigned.");
   if (asset.status === "FROZEN") throw unprocessable("ASSET_FROZEN", "Unfreeze the asset before reassigning it.");
 
   const previous = asset.owner_did;
-  tx(() => {
-    run(`UPDATE assets SET owner_did = ?, updated_at = ? WHERE id = ?`, ownerDid, nowIso(), assetId);
+  await tx(async () => {
+    await run(`UPDATE assets SET owner_did = ?, updated_at = ? WHERE id = ?`, ownerDid, nowIso(), assetId);
     recordAssetEvent({ assetId, eventType: "ASSIGNED", actorId: actor.identityId, traceId, fromDid: previous, toDid: ownerDid });
   });
   return getAsset(actor.organizationId, assetId)!;
 }
 
 export async function transferAsset(actor: ActorContext, traceId: string, assetId: string, newOwnerDid: string) {
-  const asset = getAsset(actor.organizationId, assetId);
+  const asset = await getAsset(actor.organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (asset.status === "REVOKED") throw unprocessable("ASSET_REVOKED", "A revoked asset cannot be transferred.");
   if (asset.status === "FROZEN") throw unprocessable("ASSET_FROZEN", "This asset is frozen and cannot be transferred.");
@@ -172,8 +172,8 @@ export async function transferAsset(actor: ActorContext, traceId: string, assetI
     txHash = receipt.txHash;
   }
 
-  tx(() => {
-    run(`UPDATE assets SET owner_did = ?, chain_tx_hash = COALESCE(?, chain_tx_hash), updated_at = ? WHERE id = ?`,
+  await tx(async () => {
+    await run(`UPDATE assets SET owner_did = ?, chain_tx_hash = COALESCE(?, chain_tx_hash), updated_at = ? WHERE id = ?`,
       newOwnerDid, txHash, nowIso(), assetId);
     recordAssetEvent({ assetId, eventType: "TRANSFERRED", actorId: actor.identityId, traceId, fromDid: previous, toDid: newOwnerDid, txHash });
   });
@@ -189,7 +189,7 @@ export async function transferAsset(actor: ActorContext, traceId: string, assetI
 }
 
 export async function setFrozen(actor: ActorContext, traceId: string, assetId: string, frozen: boolean, reason: string) {
-  const asset = getAsset(actor.organizationId, assetId);
+  const asset = await getAsset(actor.organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (asset.status === "REVOKED") throw unprocessable("ASSET_REVOKED", "A revoked asset cannot change freeze state.");
 
@@ -199,8 +199,8 @@ export async function setFrozen(actor: ActorContext, traceId: string, assetId: s
     txHash = receipt.txHash;
   }
 
-  tx(() => {
-    run(`UPDATE assets SET status = ?, updated_at = ? WHERE id = ?`, frozen ? "FROZEN" : "ACTIVE", nowIso(), assetId);
+  await tx(async () => {
+    await run(`UPDATE assets SET status = ?, updated_at = ? WHERE id = ?`, frozen ? "FROZEN" : "ACTIVE", nowIso(), assetId);
     recordAssetEvent({
       assetId, eventType: frozen ? "FROZEN" : "UNFROZEN",
       actorId: actor.identityId, traceId, txHash, detail: { reason },
@@ -210,7 +210,7 @@ export async function setFrozen(actor: ActorContext, traceId: string, assetId: s
 }
 
 export async function revokeAsset(actor: ActorContext, traceId: string, assetId: string, reason: string) {
-  const asset = getAsset(actor.organizationId, assetId);
+  const asset = await getAsset(actor.organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (asset.status === "REVOKED") return asset;
 
@@ -220,8 +220,8 @@ export async function revokeAsset(actor: ActorContext, traceId: string, assetId:
     txHash = receipt.txHash;
   }
 
-  tx(() => {
-    run(`UPDATE assets SET status = 'REVOKED', updated_at = ? WHERE id = ?`, nowIso(), assetId);
+  await tx(async () => {
+    await run(`UPDATE assets SET status = 'REVOKED', updated_at = ? WHERE id = ?`, nowIso(), assetId);
     recordAssetEvent({ assetId, eventType: "REVOKED", actorId: actor.identityId, traceId, txHash, detail: { reason } });
   });
   return getAsset(actor.organizationId, assetId)!;
@@ -233,7 +233,7 @@ export async function revokeAsset(actor: ActorContext, traceId: string, assetId:
  * "metadata differs" are very different incidents and collapsing them loses the signal.
  */
 export async function verifyAssetOnChain(organizationId: string, assetId: string) {
-  const asset = getAsset(organizationId, assetId);
+  const asset = await getAsset(organizationId, assetId);
   if (!asset) throw notFound("Asset not found.");
   if (!asset.nft_token_id) {
     return { verified: false, reason: "Asset has not been minted; there is nothing on-chain to compare against.", onChain: null, checks: [] };
@@ -263,25 +263,25 @@ export async function verifyAssetOnChain(organizationId: string, assetId: string
 
 /* ---------------------------------------------------------------- collections */
 
-export function listCollections(organizationId: string) {
-  return many<any>(
+export async function listCollections(organizationId: string) {
+  return await many<any>(
     `SELECT c.*, (SELECT COUNT(*) FROM assets a WHERE a.collection_id = c.id) AS asset_count
      FROM asset_collections c WHERE c.organization_id = ? ORDER BY c.name`,
     organizationId,
   );
 }
 
-export function createCollection(organizationId: string, name: string, description = "") {
-  if (one(`SELECT id FROM asset_collections WHERE organization_id = ? AND name = ?`, organizationId, name)) {
+export async function createCollection(organizationId: string, name: string, description = "") {
+  if (await one(`SELECT id FROM asset_collections WHERE organization_id = ? AND name = ?`, organizationId, name)) {
     throw conflict("COLLECTION_EXISTS", `A collection named "${name}" already exists.`);
   }
   const id = newId("asset");
-  run(`INSERT INTO asset_collections (id, organization_id, name, description, created_at) VALUES (?,?,?,?,?)`,
+  await run(`INSERT INTO asset_collections (id, organization_id, name, description, created_at) VALUES (?,?,?,?,?)`,
     id, organizationId, name, description, nowIso());
-  return one<any>(`SELECT * FROM asset_collections WHERE id = ?`, id);
+  return await one<any>(`SELECT * FROM asset_collections WHERE id = ?`, id);
 }
 
-export function toApi(row: any) {
+export async function toApi(row: any) {
   return {
     id: row.id, name: row.name, assetType: row.asset_type,
     departmentId: row.department_id, departmentName: row.department_name ?? null,
@@ -293,7 +293,7 @@ export function toApi(row: any) {
   };
 }
 
-export function eventToApi(row: any) {
+export async function eventToApi(row: any) {
   return {
     id: row.id, assetId: row.asset_id, eventType: row.event_type,
     fromDid: row.from_did, toDid: row.to_did, actorId: row.actor_id,

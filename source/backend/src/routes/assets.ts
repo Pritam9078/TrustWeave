@@ -11,59 +11,62 @@ import { notFound } from "../core/errors.js";
 export async function assetRoutes(app: FastifyInstance) {
   app.get("/api/assets", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "ASSET_READ", resource: { type: "ASSET", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "ASSET_READ", resource: { type: "ASSET", query: true }, ip: req.ip });
     const q = req.query as any;
-    let rows = assetService.listAssets(actor.organizationId, q);
+    let rows = await assetService.listAssets(actor.organizationId, q);
 
     // Scope-filter the *list*, not just individual reads. A Manager confined to Finance
     // must not be able to enumerate HR asset names, which a per-item check on the detail
     // route alone would still allow.
-    rows = rows.filter((row) => {
-      const decision = authz.check({
+    const filtered = [];
+    for (const row of rows) {
+      const decision = await authz.check({
         actor, action: "ASSET_READ",
         resource: {
           type: "ASSET", id: row.id, organizationId: row.organization_id,
           departmentId: row.department_id, collectionId: row.collection_id, ownerDid: row.owner_did,
         },
       });
-      return decision.decision !== "DENY";
-    });
-    return { assets: rows.map(assetService.toApi) };
+      if (decision.decision !== "DENY") {
+        filtered.push(row);
+      }
+    }
+    return { assets: filtered.map(assetService.toApi) };
   });
 
   app.get("/api/assets/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    authz.enforce({
+    await authz.enforce({
       actor, action: "ASSET_READ",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id, collectionId: asset.collection_id, ownerDid: asset.owner_did },
       ip: req.ip,
     });
     return {
       asset: assetService.toApi(asset),
-      history: assetService.assetHistory(id).map(assetService.eventToApi),
-      proofs: proofService.listProofs(actor.organizationId, { subjectType: "ASSET", subjectId: id }).map(proofService.toApi),
+      history: (await assetService.assetHistory(id)).map(assetService.eventToApi),
+      proofs: (await proofService.listProofs(actor.organizationId, { subjectType: "ASSET", subjectId: id })).map(proofService.toApi),
     };
   });
 
   app.get("/api/assets/:id/verify", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "PROOF_VERIFY", resource: { type: "ASSET", id }, ip: req.ip });
+    await authz.enforce({ actor, action: "PROOF_VERIFY", resource: { type: "ASSET", id }, ip: req.ip });
     return assetService.verifyAssetOnChain(actor.organizationId, id);
   });
 
   app.post("/api/assets", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createAsset, req.body);
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_CREATE",
       resource: { type: "ASSET", departmentId: body.departmentId ?? null, collectionId: body.collectionId ?? null },
       ip: req.ip, payload: { name: body.name, assetType: body.assetType },
     });
-    const asset = assetService.createAsset(actor, enforcement.traceId, body);
+    const asset = await assetService.createAsset(actor, enforcement.traceId, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "ASSET_CREATED", resourceType: "ASSET", resourceId: asset.id,
@@ -75,9 +78,9 @@ export async function assetRoutes(app: FastifyInstance) {
   app.post("/api/assets/:id/mint", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_MINT",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id, collectionId: asset.collection_id },
       ip: req.ip,
@@ -87,7 +90,7 @@ export async function assetRoutes(app: FastifyInstance) {
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "ASSET_MINTED", resourceType: "ASSET", resourceId: id,
       decision: "EXECUTED", executionRef: receipt.txHash,
-      payload: { tokenId: minted.nft_token_id, txHash: receipt.txHash, chainId: receipt.chainId, simulated: receipt.simulated },
+      payload: { tokenId: (await minted).nft_token_id, txHash: receipt.txHash, chainId: receipt.chainId, simulated: receipt.simulated },
     });
     return { asset: assetService.toApi(minted), receipt };
   });
@@ -96,9 +99,9 @@ export async function assetRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.assetOwner, req.body);
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_ASSIGN",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id, collectionId: asset.collection_id },
       ip: req.ip,
@@ -116,9 +119,9 @@ export async function assetRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.assetTransfer, req.body);
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_TRANSFER",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id, collectionId: asset.collection_id, ownerDid: asset.owner_did },
       ip: req.ip, payload: { newOwnerDid: body.newOwnerDid },
@@ -136,9 +139,9 @@ export async function assetRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.assetFreeze, req.body);
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_FREEZE",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id },
       ip: req.ip,
@@ -156,9 +159,9 @@ export async function assetRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.assetRevoke, req.body);
-    const asset = assetService.getAsset(actor.organizationId, id);
+    const asset = await assetService.getAsset(actor.organizationId, id);
     if (!asset) throw notFound("Asset not found.");
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "ASSET_REVOKE",
       resource: { type: "ASSET", id, organizationId: asset.organization_id, departmentId: asset.department_id },
       ip: req.ip,
@@ -174,14 +177,14 @@ export async function assetRoutes(app: FastifyInstance) {
 
   app.get("/api/collections", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "ASSET_READ", resource: { type: "ASSET", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "ASSET_READ", resource: { type: "ASSET", query: true }, ip: req.ip });
     return { collections: assetService.listCollections(actor.organizationId) };
   });
 
   app.post("/api/collections", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createCollection, req.body);
-    authz.enforce({ actor, action: "ASSET_CREATE", resource: { type: "ASSET" }, ip: req.ip });
+    await authz.enforce({ actor, action: "ASSET_CREATE", resource: { type: "ASSET" }, ip: req.ip });
     return reply.code(201).send({ collection: assetService.createCollection(actor.organizationId, body.name, body.description) });
   });
 }

@@ -12,14 +12,14 @@ export async function authRoutes(app: FastifyInstance) {
   /** Step 1 of DID auth. Rate-limited harder than the rest of the API. */
   app.post("/api/auth/challenge", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (req) => {
     const body = validate(S.didLoginStart, req.body);
-    const challenge = identityService.createChallenge(body.did);
+    const challenge = await identityService.createChallenge(body.did);
     // `known` is intentionally not returned to the client — see createChallenge.
     return { challengeId: challenge.challengeId, nonce: challenge.nonce, message: challenge.message, expiresInSeconds: challenge.expiresInSeconds };
   });
 
   app.post("/api/auth/verify", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (req, reply) => {
     const body = validate(S.didLoginVerify, req.body);
-    const { session, identity } = identityService.verifyChallengeAndLogin({
+    const { session, identity } = await identityService.verifyChallengeAndLogin({
       ...body, ip: req.ip, userAgent: String(req.headers["user-agent"] ?? ""),
     });
     audit.record({
@@ -29,12 +29,12 @@ export async function authRoutes(app: FastifyInstance) {
       decision: "ALLOW", reasonCodes: ["DID_SIGNATURE"], ip: req.ip,
       payload: { method: "did-challenge" },
     });
-    return reply.send(sessionResponse(session, identity));
+    return reply.send(await sessionResponse(session, identity));
   });
 
   app.post("/api/auth/login", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req, reply) => {
     const body = validate(S.passwordLogin, req.body);
-    const { session, identity } = identityService.passwordLogin({
+    const { session, identity } = await identityService.passwordLogin({
       ...body, ip: req.ip, userAgent: String(req.headers["user-agent"] ?? ""),
     });
     audit.record({
@@ -44,20 +44,20 @@ export async function authRoutes(app: FastifyInstance) {
       decision: "ALLOW", reasonCodes: ["PASSWORD"], ip: req.ip,
       payload: { method: "password", note: "Development-only authentication path." },
     });
-    return reply.send(sessionResponse(session, identity));
+    return reply.send(await sessionResponse(session, identity));
   });
 
   /** The client's source of truth for what to render. Recomputed live, never cached. */
   app.get("/api/session", async (req) => {
     const actor = requireActor(req);
-    const perms = identityService.effectivePermissions(actor.identityId, actor.organizationId)!;
+    const perms = (await identityService.effectivePermissions(actor.identityId, actor.organizationId))!;
     const org = orgService.getOrganization(actor.organizationId);
     return {
       identity: {
         id: actor.identityId, did: actor.did, kind: actor.kind,
         displayName: perms.roles.length ? undefined : undefined,
       },
-      organization: org ? { id: org.id, name: org.name, slug: org.slug } : null,
+      organization: org ? { id: (await org).id, name: (await org).name, slug: (await org).slug } : null,
       departmentId: actor.departmentId,
       roles: perms.roles,
       capabilities: perms.capabilities,
@@ -69,7 +69,7 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post("/api/auth/logout", async (req) => {
     const actor = requireActor(req);
-    identityService.revokeAllSessionsFor(actor.identityId);
+    await identityService.revokeAllSessionsFor(actor.identityId);
     audit.record({
       organizationId: actor.organizationId, traceId: newTraceId(),
       actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
@@ -85,8 +85,8 @@ export async function authRoutes(app: FastifyInstance) {
   }));
 }
 
-function sessionResponse(session: { token: string; sessionId: string; expiresAt: string }, identity: any) {
-  const perms = identityService.effectivePermissions(identity.id, identity.organization_id)!;
+async function sessionResponse(session: { token: string; sessionId: string; expiresAt: string }, identity: any) {
+  const perms = (await identityService.effectivePermissions(identity.id, identity.organization_id))!;
   return {
     token: session.token,
     expiresAt: session.expiresAt,

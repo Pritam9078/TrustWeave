@@ -1,4 +1,4 @@
-import { one, many, run } from "../db/client.js";
+import { one, many, run } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { hashObject, sha256Hex } from "../core/hash.js";
@@ -33,7 +33,7 @@ export async function anchor(input: AnchorInput) {
   const id = newId("prf");
   const chain = getBlockchainAdapter();
 
-  run(
+  await run(
     `INSERT INTO proofs (id, organization_id, event_id, subject_type, subject_id, commitment, chain_id, status, created_at)
      VALUES (?,?,?,?,?,?,?,?,?)`,
     id, input.organizationId, input.eventId ?? null, input.subjectType, input.subjectId,
@@ -45,14 +45,14 @@ export async function anchor(input: AnchorInput) {
       commitment: "0x" + commitment.replace(/^sha256:/, ""),
       subjectCommitment,
     });
-    run(`UPDATE proofs SET tx_hash = ?, block_number = ?, status = 'ANCHORED', anchored_at = ? WHERE id = ?`,
+    await run(`UPDATE proofs SET tx_hash = ?, block_number = ?, status = 'ANCHORED', anchored_at = ? WHERE id = ?`,
       receipt.txHash, receipt.blockNumber ?? null, nowIso(), id);
   } catch (err: any) {
     // A failed anchor is recorded as FAILED rather than swallowed. An operator can see
     // exactly which proofs did not make it onto the chain and retry them, instead of
     // discovering a silent gap during an audit.
-    run(`UPDATE proofs SET status = 'FAILED' WHERE id = ?`, id);
-    audit.record({
+    await run(`UPDATE proofs SET status = 'FAILED' WHERE id = ?`, id);
+    await audit.record({
       organizationId: input.organizationId,
       traceId: `proof_${id}`,
       action: "PROOF_ANCHOR",
@@ -64,20 +64,20 @@ export async function anchor(input: AnchorInput) {
     });
   }
 
-  return getProof(input.organizationId, id)!;
+  return await getProof(input.organizationId, id)!;
 }
 
-export function getProof(organizationId: string, id: string) {
-  return one<any>(`SELECT * FROM proofs WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getProof(organizationId: string, id: string) {
+  return await one<any>(`SELECT * FROM proofs WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
-export function listProofs(organizationId: string, opts: { subjectType?: string; subjectId?: string; status?: string; limit?: number } = {}) {
+export async function listProofs(organizationId: string, opts: { subjectType?: string; subjectId?: string; status?: string; limit?: number } = {}) {
   const where = ["organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.subjectType) { where.push("subject_type = ?"); params.push(opts.subjectType); }
   if (opts.subjectId) { where.push("subject_id = ?"); params.push(opts.subjectId); }
   if (opts.status) { where.push("status = ?"); params.push(opts.status); }
-  return many<any>(`SELECT * FROM proofs WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ?`,
+  return await many<any>(`SELECT * FROM proofs WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT ?`,
     ...params, opts.limit ?? 200);
 }
 
@@ -88,7 +88,7 @@ export interface VerificationCheck { name: string; pass: boolean; detail: string
  * from the proof row on trust.
  */
 export async function verifyProof(organizationId: string, proofId: string) {
-  const proof = getProof(organizationId, proofId);
+  const proof = await getProof(organizationId, proofId);
   if (!proof) throw notFound("Proof not found.");
   const chain = getBlockchainAdapter();
   const checks: VerificationCheck[] = [];
@@ -105,7 +105,7 @@ export async function verifyProof(organizationId: string, proofId: string) {
   // If the proof references an audit event, recompute that event's payload hash from
   // the stored payload. A mismatch means the recorded event was edited after anchoring.
   if (proof.event_id) {
-    const event = audit.byId(organizationId, proof.event_id);
+    const event = await audit.byId(organizationId, proof.event_id);
     if (!event) {
       checks.push({ name: "Referenced audit event still exists", pass: false, detail: "The referenced audit event has been deleted." });
     } else {
@@ -118,7 +118,7 @@ export async function verifyProof(organizationId: string, proofId: string) {
     }
   }
 
-  const chainState = audit.verifyChain(organizationId);
+  const chainState = await audit.verifyChain(organizationId);
   checks.push({
     name: "Audit hash chain is intact",
     pass: chainState.valid,

@@ -15,8 +15,8 @@ import { notFound, forbidden } from "../core/errors.js";
 export async function agentRoutes(app: FastifyInstance) {
   app.get("/api/agents", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", query: true }, ip: req.ip });
-    return { agents: agentService.listAgents(actor.organizationId).map(agentService.toApi) };
+    await authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", query: true }, ip: req.ip });
+    return await { agents: (await agentService.listAgents(actor.organizationId)).map(agentService.toApi) };
   });
 
   app.get("/api/agents/tools", async (req) => {
@@ -27,12 +27,12 @@ export async function agentRoutes(app: FastifyInstance) {
   app.get("/api/agents/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    const agent = agentService.getAgent(actor.organizationId, id);
+    const agent = await agentService.getAgent(actor.organizationId, id);
     if (!agent) throw notFound("Agent not found.");
-    authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", id, departmentId: agent.department_id }, ip: req.ip });
+    await authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", id, departmentId: (await agent).department_id }, ip: req.ip });
     return {
-      agent: agentService.toApi(agent),
-      toolCalls: agentService.toolCallHistory(id, 50).map((c) => ({
+      agent: (await agentService.toApi(agent)),
+      toolCalls: (await agentService.toolCallHistory(id, 50)).map((c) => ({
         id: c.id, traceId: c.trace_id, tool: c.tool_name, args: JSON.parse(c.args_json || "{}"),
         decision: c.decision, reasonCodes: JSON.parse(c.reason_codes || "[]"),
         latencyMs: c.latency_ms, createdAt: c.created_at,
@@ -46,13 +46,13 @@ export async function agentRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const agent = agentService.getAgent(actor.organizationId, id);
     if (!agent) throw notFound("Agent not found.");
-    authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", id }, ip: req.ip });
+    await authz.enforce({ actor, action: "AGENT_READ", resource: { type: "AGENT", id }, ip: req.ip });
     const chain = getBlockchainAdapter();
     const onChain = await chain.getAgent(didCommitment(id));
     return {
       onChain, adapterKind: chain.kind, chainId: chain.chainId,
-      databaseStatus: agent.status,
-      statusAgrees: onChain.exists ? onChain.active === (agent.status === "ACTIVE") : null,
+      databaseStatus: (await agent).status,
+      statusAgrees: onChain.exists ? onChain.active === ((await agent).status === "ACTIVE") : null,
       note: chain.kind === "memory"
         ? "Read from the in-memory chain simulation. Deterministic and invariant-enforcing, but not externally verifiable."
         : "Read directly from the deployed contract, independent of the application database.",
@@ -62,7 +62,7 @@ export async function agentRoutes(app: FastifyInstance) {
   app.post("/api/agents", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.registerAgent, req.body);
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "AGENT_REGISTER", resource: { type: "AGENT", departmentId: body.departmentId ?? null },
       ip: req.ip, payload: { name: body.name, capabilities: body.capabilities, tools: body.tools },
     });
@@ -78,12 +78,12 @@ export async function agentRoutes(app: FastifyInstance) {
     const { agent, token } = await agentService.registerAgent(actor, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
-      actorDid: actor.did, action: "AGENT_REGISTERED", resourceType: "AGENT", resourceId: agent.id,
+      actorDid: actor.did, action: "AGENT_REGISTERED", resourceType: "AGENT", resourceId: (await agent).id,
       decision: "EXECUTED",
-      payload: { name: body.name, did: agent.did, capabilities: body.capabilities, tools: body.tools, limits: body.limits },
+      payload: { name: body.name, did: (await agent).did, capabilities: body.capabilities, tools: body.tools, limits: body.limits },
     });
     return reply.code(201).send({
-      agent: agentService.toApi(agent),
+      agent: (await agentService.toApi(agent)),
       token,
       tokenNotice: "This agent key is shown once and only its hash is stored. Save it now.",
     });
@@ -93,49 +93,49 @@ export async function agentRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.configureAgent, req.body);
-    const agent = agentService.getAgent(actor.organizationId, id);
+    const agent = await agentService.getAgent(actor.organizationId, id);
     if (!agent) throw notFound("Agent not found.");
-    const enforcement = authz.enforce({ actor, action: "AGENT_CONFIGURE", resource: { type: "AGENT", id, departmentId: agent.department_id }, ip: req.ip });
+    const enforcement = await authz.enforce({ actor, action: "AGENT_CONFIGURE", resource: { type: "AGENT", id, departmentId: (await agent).department_id }, ip: req.ip });
 
     const overreach = (body.capabilities ?? []).filter((c) => !actor.capabilities.has(c));
     if (overreach.length) throw forbidden("CAPABILITY_MISSING", `You cannot grant capabilities you do not hold: ${overreach.join(", ")}.`);
 
-    const before = agentService.toApi(agent);
-    const updated = agentService.configureAgent(actor.organizationId, id, body);
+    const before = (await agentService.toApi(agent));
+    const updated = await agentService.configureAgent(actor.organizationId, id, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "AGENT_CONFIGURED", resourceType: "AGENT", resourceId: id,
       decision: "EXECUTED",
       payload: {
-        capabilitiesBefore: before.capabilities, capabilitiesAfter: agentService.toApi(updated).capabilities,
-        toolsBefore: before.tools, toolsAfter: agentService.toApi(updated).tools,
-        limitsBefore: before.limits, limitsAfter: agentService.toApi(updated).limits,
+        capabilitiesBefore: before.capabilities, capabilitiesAfter: (await agentService.toApi(updated)).capabilities,
+        toolsBefore: before.tools, toolsAfter: (await agentService.toApi(updated)).tools,
+        limitsBefore: before.limits, limitsAfter: (await agentService.toApi(updated)).limits,
       },
     });
-    return { agent: agentService.toApi(updated) };
+    return { agent: (await agentService.toApi(updated)) };
   });
 
   app.post("/api/agents/:id/freeze", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.agentStatus, req.body);
-    const agent = agentService.getAgent(actor.organizationId, id);
+    const agent = await agentService.getAgent(actor.organizationId, id);
     if (!agent) throw notFound("Agent not found.");
-    const enforcement = authz.enforce({ actor, action: "AGENT_FREEZE", resource: { type: "AGENT", id, departmentId: agent.department_id }, ip: req.ip, payload: { status: body.status } });
+    const enforcement = await authz.enforce({ actor, action: "AGENT_FREEZE", resource: { type: "AGENT", id, departmentId: (await agent).department_id }, ip: req.ip, payload: { status: body.status } });
     const updated = await agentService.setAgentStatus(actor.organizationId, id, body.status, actor.identityId, body.reason);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: `AGENT_${body.status}`, resourceType: "AGENT", resourceId: id,
       decision: "EXECUTED", payload: { reason: body.reason, sessionsRevoked: body.status !== "ACTIVE" },
     });
-    return { agent: agentService.toApi(updated) };
+    return { agent: (await agentService.toApi(updated)) };
   });
 
   app.post("/api/agents/:id/rotate-token", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    const enforcement = authz.enforce({ actor, action: "AGENT_CONFIGURE", resource: { type: "AGENT", id }, ip: req.ip });
-    const { token } = agentService.rotateToken(actor.organizationId, id);
+    const enforcement = await authz.enforce({ actor, action: "AGENT_CONFIGURE", resource: { type: "AGENT", id }, ip: req.ip });
+    const { token } = await  agentService.rotateToken(actor.organizationId, id);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "AGENT_TOKEN_ROTATED", resourceType: "AGENT", resourceId: id, decision: "EXECUTED",
@@ -162,7 +162,7 @@ export async function agentRoutes(app: FastifyInstance) {
     // Invoking the agent task loop is authorized at the capability level; every action
     // the loop then proposes is re-authorized individually inside the Tool Gateway, so
     // this gate deliberately does not stand in for the per-action checks.
-    authz.enforce({
+    await authz.enforce({
       actor, action: "AGENT_INVOKE",
       resource: { type: "AGENT", id: actor.agent?.id ?? null, query: true, departmentId: actor.departmentId },
       ip: req.ip, payload: { execute: body.execute },

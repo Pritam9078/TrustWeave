@@ -1,4 +1,4 @@
-import { one, many, j } from "../db/client.js";
+import { one, many, j } from "../db/clientV2.js";
 import { authorize as runEngine } from "../authorization/engine.js";
 import type { ScopeRecord } from "../authorization/scope.js";
 import type { PolicyRecord } from "../authorization/policy.js";
@@ -21,10 +21,10 @@ import { getCapability } from "../authorization/capabilities.js";
  * the permission simulator, which needs a decision without an execution.
  */
 
-export function loadScopesForActor(actor: ActorContext): ScopeRecord[] {
+export async function loadScopesForActor(actor: ActorContext): Promise<ScopeRecord[]> {
   if (actor.scopeIds.length === 0) return [];
   const placeholders = actor.scopeIds.map(() => "?").join(",");
-  const rows = many<any>(
+  const rows = await many<any>(
     `SELECT * FROM scopes WHERE organization_id = ? AND id IN (${placeholders})`,
     actor.organizationId, ...actor.scopeIds,
   );
@@ -42,8 +42,8 @@ export function toScopeRecord(row: any): ScopeRecord {
   };
 }
 
-export function loadActivePolicies(organizationId: string): PolicyRecord[] {
-  const rows = many<any>(
+export async function loadActivePolicies(organizationId: string): Promise<PolicyRecord[]> {
+  const rows = await many<any>(
     `SELECT * FROM policies WHERE organization_id = ? AND status = 'ACTIVE' ORDER BY policy_key, version DESC`,
     organizationId,
   );
@@ -74,8 +74,8 @@ export function toPolicyRecord(row: any): PolicyRecord {
   };
 }
 
-export function loadEmergencyFlags(organizationId: string): Record<string, boolean> {
-  const rows = many<{ flag_key: string; enabled: number }>(
+export async function loadEmergencyFlags(organizationId: string): Promise<Record<string, boolean>> {
+  const rows = await many<{ flag_key: string; enabled: number }>(
     `SELECT flag_key, enabled FROM emergency_flags WHERE organization_id = ?`,
     organizationId,
   );
@@ -89,21 +89,21 @@ export function loadEmergencyFlags(organizationId: string): Record<string, boole
  * provider (EXECUTING or later) — a denied or still-pending intent has not consumed
  * budget, and counting it would let a burst of blocked requests lock out a legitimate one.
  */
-export function loadRollingSpend(
+export async function loadRollingSpend(
   organizationId: string,
   actorIdentityId: string,
   agentId: string | null,
   window: "1h" | "1d" | "7d" | "30d" = "1d",
-): { windowAmount: number; windowCount: number; window: "1h" | "1d" | "7d" | "30d" } {
+): Promise<{ windowAmount: number; windowCount: number; window: "1h" | "1d" | "7d" | "30d" }> {
   const since = windowStart(window);
   const executedStates = "('EXECUTING','EXECUTED','SETTLED','RECONCILED')";
   const row = agentId
-    ? one<{ total: number; n: number }>(
+    ? await one<{ total: number; n: number }>(
         `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n FROM payment_intents
          WHERE organization_id = ? AND agent_id = ? AND state IN ${executedStates} AND created_at >= ?`,
         organizationId, agentId, since,
       )
-    : one<{ total: number; n: number }>(
+    : await one<{ total: number; n: number }>(
         `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS n FROM payment_intents
          WHERE organization_id = ? AND actor_identity_id = ? AND state IN ${executedStates} AND created_at >= ?`,
         organizationId, actorIdentityId, since,
@@ -120,12 +120,12 @@ export interface CheckParams {
 }
 
 /** Evaluate without recording anything. Used by the permission simulator. */
-export function check(params: CheckParams): AuthorizationResult {
+export async function check(params: CheckParams): Promise<AuthorizationResult> {
   const { actor, action, resource } = params;
   const context: AuthorizationContext = { ...(params.context ?? {}) };
 
   if (context.amount !== undefined && context.spend === undefined) {
-    context.spend = loadRollingSpend(actor.organizationId, actor.identityId, actor.agent?.id ?? null, "1d");
+    context.spend = await loadRollingSpend(actor.organizationId, actor.identityId, actor.agent?.id ?? null, "1d");
   }
 
   return runEngine({
@@ -133,9 +133,9 @@ export function check(params: CheckParams): AuthorizationResult {
     action,
     resource: { ...resource, organizationId: resource.organizationId ?? actor.organizationId },
     context,
-    scopes: loadScopesForActor(actor),
-    policies: loadActivePolicies(actor.organizationId),
-    emergencyFlags: loadEmergencyFlags(actor.organizationId),
+    scopes: await loadScopesForActor(actor),
+    policies: await loadActivePolicies(actor.organizationId),
+    emergencyFlags: await loadEmergencyFlags(actor.organizationId),
     traceId: params.traceId ?? newTraceId(),
   });
 }
@@ -151,11 +151,11 @@ export interface EnforceResult extends AuthorizationResult {
  * a denial, and a `throw` that skipped it would make blocked attacks invisible. The
  * PRD requires both allow and deny decisions on protected operations to be recorded.
  */
-export function enforce(params: CheckParams & { ip?: string | null; payload?: Record<string, unknown> }): EnforceResult {
-  const result = check(params);
+export async function enforce(params: CheckParams & { ip?: string | null; payload?: Record<string, unknown> }): Promise<EnforceResult> {
+  const result = await check(params);
   const cap = getCapability(params.action);
 
-  const event = audit.record({
+  const event = await audit.record({
     organizationId: params.actor.organizationId,
     traceId: result.traceId,
     actorId: params.actor.identityId,
@@ -195,6 +195,6 @@ export function enforce(params: CheckParams & { ip?: string | null; payload?: Re
  * machinery, but still with the full identity/membership/scope pipeline and an audit
  * record for non-trivial reads.
  */
-export function enforceRead(actor: ActorContext, action: string, resource: ResourceDescriptor, ip?: string | null) {
-  return enforce({ actor, action, resource, ip });
+export async function enforceRead(actor: ActorContext, action: string, resource: ResourceDescriptor, ip?: string | null) {
+  return await enforce({ actor, action, resource, ip });
 }

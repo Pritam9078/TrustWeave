@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { badRequest, conflict, forbidden, notFound } from "../core/errors.js";
@@ -31,11 +31,11 @@ export interface CreateApprovalInput {
   traceId: string;
 }
 
-export function createApproval(input: CreateApprovalInput) {
+export async function createApproval(input: CreateApprovalInput) {
   // The tenant predicate matters here even though request ids are globally unique: this
   // is the idempotency check, and without it the dedupe window spans organizations. A
   // lookup that can see another tenant's approval is a lookup that can return one.
-  const existing = one<any>(
+  const existing = await one<any>(
     `SELECT * FROM approvals WHERE organization_id = ? AND request_type = ? AND request_id = ?`,
     input.organizationId, input.requestType, input.requestId,
   );
@@ -44,7 +44,7 @@ export function createApproval(input: CreateApprovalInput) {
   if (existing) return existing;
 
   const id = newId("apr");
-  run(
+  await run(
     `INSERT INTO approvals (id, organization_id, request_type, request_id, requested_by, reason,
       required_capability, evidence_json, policy_id, policy_version, status, trace_id, created_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -52,15 +52,15 @@ export function createApproval(input: CreateApprovalInput) {
     input.reason, input.requiredCapability, j.enc(input.evidence ?? {}),
     input.policyId ?? null, input.policyVersion ?? null, "PENDING", input.traceId, nowIso(),
   );
-  return one<any>(`SELECT * FROM approvals WHERE organization_id = ? AND id = ?`, input.organizationId, id)!;
+  return await one<any>(`SELECT * FROM approvals WHERE organization_id = ? AND id = ?`, input.organizationId, id)!;
 }
 
-export function listApprovals(organizationId: string, opts: { status?: string; requestType?: string } = {}) {
+export async function listApprovals(organizationId: string, opts: { status?: string; requestType?: string } = {}) {
   const where = ["a.organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.status) { where.push("a.status = ?"); params.push(opts.status); }
   if (opts.requestType) { where.push("a.request_type = ?"); params.push(opts.requestType); }
-  return many<any>(
+  return await many<any>(
     `SELECT a.*, r.display_name AS requester_name, r.did AS requester_did,
             ap.display_name AS approver_name
      FROM approvals a
@@ -71,8 +71,8 @@ export function listApprovals(organizationId: string, opts: { status?: string; r
   );
 }
 
-export function getApproval(organizationId: string, id: string) {
-  return one<any>(
+export async function getApproval(organizationId: string, id: string) {
+  return await one<any>(
     `SELECT a.*, r.display_name AS requester_name, r.did AS requester_did, ap.display_name AS approver_name
      FROM approvals a
      LEFT JOIN identities r ON r.id = a.requested_by
@@ -82,8 +82,8 @@ export function getApproval(organizationId: string, id: string) {
   );
 }
 
-export function pendingFor(organizationId: string, requestType: string, requestId: string) {
-  return one<any>(
+export async function pendingFor(organizationId: string, requestType: string, requestId: string) {
+  return await one<any>(
     `SELECT * FROM approvals WHERE organization_id = ? AND request_type = ? AND request_id = ? AND status = 'PENDING'`,
     organizationId, requestType, requestId,
   );
@@ -99,8 +99,8 @@ export interface DecideResult { approval: any; alreadyDecided: boolean; }
  * count is checked — that is what makes the double-approval race unwinnable rather
  * than merely unlikely.
  */
-export function decide(actor: ActorContext, approvalId: string, decision: "APPROVED" | "REJECTED", note: string): DecideResult {
-  const approval = getApproval(actor.organizationId, approvalId);
+export async function decide(actor: ActorContext, approvalId: string, decision: "APPROVED" | "REJECTED", note: string): Promise<DecideResult>{
+  const approval = await getApproval(actor.organizationId, approvalId);
   if (!approval) throw notFound("Approval request not found.");
 
   if (approval.status !== "PENDING") {
@@ -114,8 +114,8 @@ export function decide(actor: ActorContext, approvalId: string, decision: "APPRO
   }
 
   let changed = 0;
-  tx(() => {
-    const result = run(
+  await tx(async () => {
+    const result = await run(
       `UPDATE approvals SET status = ?, approver_id = ?, decision_note = ?, decided_at = ?
        WHERE id = ? AND status = 'PENDING'`,
       decision, actor.identityId, note, nowIso(), approvalId,
@@ -148,7 +148,7 @@ export function decide(actor: ActorContext, approvalId: string, decision: "APPRO
   return { approval: getApproval(actor.organizationId, approvalId)!, alreadyDecided: false };
 }
 
-export function toApi(row: any) {
+export async function toApi(row: any) {
   return {
     id: row.id, requestType: row.request_type, requestId: row.request_id,
     requestedBy: row.requested_by, requesterName: row.requester_name ?? null, requesterDid: row.requester_did ?? null,

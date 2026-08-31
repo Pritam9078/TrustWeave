@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/client.js";
+import { one, many, run, tx, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { notFound } from "../core/errors.js";
@@ -79,8 +79,8 @@ export interface IngestInput {
 }
 
 /** Hash of the currently ACTIVE version of a policy, or null if there is no active version. */
-function activePolicyHash(organizationId: string, policyKey: string): string | null {
-  const row = one<any>(
+async function activePolicyHash(organizationId: string, policyKey: string): Promise<string | null> {
+  const row = await one<any>(
     `SELECT hash FROM policies WHERE organization_id = ? AND policy_key = ? AND status = 'ACTIVE'
      ORDER BY version DESC LIMIT 1`,
     organizationId, policyKey,
@@ -88,18 +88,18 @@ function activePolicyHash(organizationId: string, policyKey: string): string | n
   return row?.hash ?? null;
 }
 
-export function ingest(input: IngestInput) {
+export async function ingest(input: IngestInput) {
   const id = newId("doc");
   const ts = nowIso();
   const chunks = chunkText(input.content);
   // Captured at ingest, deliberately not resolved lazily at read time: the point is to
   // detect that the world moved after this text was written.
   const policyHash = input.sourcePolicyKey
-    ? activePolicyHash(input.organizationId, input.sourcePolicyKey)
+    ? await activePolicyHash(input.organizationId, input.sourcePolicyKey)
     : null;
 
-  tx(() => {
-    run(
+  await tx(async () => {
+    await run(
       `INSERT INTO documents (id, organization_id, source_type, title, uri, department_id, classification, scope_json, required_capability, version, status, content, source_policy_key, source_policy_hash, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, input.organizationId, input.sourceType, input.title, input.uri ?? null,
@@ -107,37 +107,38 @@ export function ingest(input: IngestInput) {
       j.enc(input.scope ?? {}), input.requiredCapability ?? null, 1, "INDEXED", input.content,
       input.sourcePolicyKey ?? null, policyHash, ts, ts,
     );
-    chunks.forEach((content, ordinal) => {
-      run(`INSERT INTO document_chunks (id, document_id, ordinal, content, embedding_json, created_at) VALUES (?,?,?,?,?,?)`,
+    for (let ordinal = 0; ordinal < chunks.length; ordinal++) {
+      const content = chunks[ordinal];
+      await run(`INSERT INTO document_chunks (id, document_id, ordinal, content, embedding, created_at) VALUES (?,?,?,?,?::vector,?)`,
         newId("chunk"), id, ordinal, content, j.enc(embed(content)), ts);
-    });
+    }
   });
 
-  return getDocument(input.organizationId, id)!;
+  return await getDocument(input.organizationId, id)!;
 }
 
-export function getDocument(organizationId: string, id: string) {
-  return one<any>(`SELECT * FROM documents WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getDocument(organizationId: string, id: string) {
+  return await one<any>(`SELECT * FROM documents WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
-export function listDocuments(organizationId: string, opts: { sourceType?: string; classification?: string } = {}) {
+export async function listDocuments(organizationId: string, opts: { sourceType?: string; classification?: string } = {}) {
   const where = ["d.organization_id = ?"];
   const params: unknown[] = [organizationId];
   if (opts.sourceType) { where.push("d.source_type = ?"); params.push(opts.sourceType); }
   if (opts.classification) { where.push("d.classification = ?"); params.push(opts.classification); }
-  return many<any>(
+  return await many<any>(
     `SELECT d.*, (SELECT COUNT(*) FROM document_chunks c WHERE c.document_id = d.id) AS chunk_count
      FROM documents d WHERE ${where.join(" AND ")} ORDER BY d.created_at DESC`,
     ...params,
   );
 }
 
-export function deleteDocument(organizationId: string, id: string) {
-  const doc = getDocument(organizationId, id);
+export async function deleteDocument(organizationId: string, id: string) {
+  const doc = await getDocument(organizationId, id);
   if (!doc) throw notFound("Document not found.");
-  tx(() => {
-    run(`DELETE FROM document_chunks WHERE document_id = ?`, id);
-    run(`DELETE FROM documents WHERE id = ?`, id);
+  await tx(async () => {
+    await run(`DELETE FROM document_chunks WHERE document_id = ?`, id);
+    await run(`DELETE FROM documents WHERE id = ?`, id);
   });
 }
 
@@ -169,13 +170,13 @@ export interface RetrievalResult {
  * an actor is required, so it is not possible to accidentally call a "retrieve
  * everything" path from an agent context.
  */
-export function retrieveForActor(actor: ActorContext, query: string, limit = 5): RetrievalResult {
-  const scopes: ScopeRecord[] = loadScopesForActor(actor);
+export async function retrieveForActor(actor: ActorContext, query: string, limit = 5): Promise<RetrievalResult> {
+  const scopes: ScopeRecord[] = await loadScopesForActor(actor);
 
   // Stage 1: SQL pre-filter. RESTRICTED documents require an explicit capability;
   // department-owned documents require the actor to be in that department or to hold
   // an organization-wide scope.
-  const allDocs = many<any>(`SELECT * FROM documents WHERE organization_id = ? AND status = 'INDEXED'`, actor.organizationId);
+  const allDocs = await many<any>(`SELECT * FROM documents WHERE organization_id = ? AND status = 'INDEXED'`, actor.organizationId);
   const excluded: { documentId: string; title: string; reason: string }[] = [];
   const accessible: any[] = [];
 
@@ -222,9 +223,18 @@ export function retrieveForActor(actor: ActorContext, query: string, limit = 5):
 
   const ids = accessible.map((d) => d.id);
   const placeholders = ids.map(() => "?").join(",");
-  const chunks = many<any>(`SELECT * FROM document_chunks WHERE document_id IN (${placeholders})`, ...ids);
+  const queryVecStr = j.enc(embed(query));
+  
+  // Use pgvector cosine distance `<=>`. The score is `1 - distance`.
+  const chunks = await many<any>(
+    `SELECT *, 1 - (embedding <=> ?::vector) as score 
+     FROM document_chunks 
+     WHERE document_id IN (${placeholders})
+     ORDER BY embedding <=> ?::vector 
+     LIMIT ?`,
+    queryVecStr, ...ids, queryVecStr, limit
+  );
   const byDoc = new Map(accessible.map((d) => [d.id, d]));
-  const queryVec = embed(query);
 
   const scored = chunks
     .map((c) => {
@@ -238,12 +248,10 @@ export function retrieveForActor(actor: ActorContext, query: string, limit = 5):
         policyKey: doc.source_policy_key ?? null,
         policyHash: doc.source_policy_hash ?? null,
         content: c.content,
-        score: cosine(queryVec, j.dec<number[]>(c.embedding_json, [])),
+        score: Number(c.score),
       };
     })
-    .filter((c) => c.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .filter((c) => c.score > 0);
 
   return {
     chunks: scored,
@@ -316,12 +324,12 @@ export interface FreshnessResult {
  * Fails closed on an indeterminate answer: a document whose governing policy has no ACTIVE
  * version at all is treated as stale, not as fresh-by-default.
  */
-export function evidenceFreshness(organizationId: string, documentIds: string[]): FreshnessResult {
+export async function evidenceFreshness(organizationId: string, documentIds: string[]): Promise<FreshnessResult> {
   const unique = [...new Set(documentIds)].filter(Boolean);
   if (!unique.length) return { fresh: true, checked: 0, stale: [] };
 
   const placeholders = unique.map(() => "?").join(",");
-  const docs = many<any>(
+  const docs = await many<any>(
     `SELECT id, title, source_policy_key, source_policy_hash FROM documents
      WHERE organization_id = ? AND id IN (${placeholders})`,
     organizationId, ...unique,
@@ -335,7 +343,7 @@ export function evidenceFreshness(organizationId: string, documentIds: string[])
     if (!doc.source_policy_key) continue;
     checked++;
 
-    const current = activePolicyHash(organizationId, doc.source_policy_key);
+    const current = await activePolicyHash(organizationId, doc.source_policy_key);
 
     if (current === null) {
       stale.push({
@@ -389,8 +397,8 @@ export function isEvidenceFresh(chunks: RetrievedChunk[], currentPolicyHash: str
 }
 
 /** Hash of the ACTIVE version of a policy, for callers pairing with isEvidenceFresh. */
-export function currentPolicyHash(organizationId: string, policyKey: string): string | null {
-  return activePolicyHash(organizationId, policyKey);
+export async function currentPolicyHash(organizationId: string, policyKey: string): Promise<string | null> {
+  return await activePolicyHash(organizationId, policyKey);
 }
 
 export function toApiDocument(row: any) {

@@ -72,7 +72,7 @@ export async function run(actor: ActorContext, instruction: string, opts: { exec
   const traceId = newTraceId();
 
   // 1. Retrieval, filtered by the actor's own scopes.
-  const retrieval = ragService.retrieveForActor(actor, instruction, 5);
+  const retrieval = await ragService.retrieveForActor(actor, instruction, 5);
 
   // 2. Injection screening across the instruction AND every retrieved chunk. Reporting
   //    only — the containment is structural, further down.
@@ -89,7 +89,7 @@ export async function run(actor: ActorContext, instruction: string, opts: { exec
 
   // 3. Evidence freshness. Retrieved text that restates a policy is only trustworthy
   //    while that policy version is still in force.
-  const freshness = ragService.evidenceFreshness(
+  const freshness = await ragService.evidenceFreshness(
     actor.organizationId,
     retrieval.chunks.map((c) => c.documentId),
   );
@@ -101,7 +101,7 @@ export async function run(actor: ActorContext, instruction: string, opts: { exec
       summary: `Retrieved evidence cites ${freshness.stale.length} policy document(s) that are no longer current.`,
       detail: { stale: freshness.stale },
     });
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId,
       actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
       action: "RAG_EVIDENCE_STALE", resourceType: "DOCUMENT",
@@ -120,7 +120,7 @@ export async function run(actor: ActorContext, instruction: string, opts: { exec
 
   const risk = classifyRisk({ proposal, injectionDetected: injection.detected, evidenceCount: retrieval.chunks.length });
 
-  audit.record({
+  await audit.record({
     organizationId: actor.organizationId, traceId,
     actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
     action: "AI_PROPOSAL", resourceType: "AGENT", resourceId: actor.agent?.id ?? actor.identityId,
@@ -184,7 +184,7 @@ export async function run(actor: ActorContext, instruction: string, opts: { exec
   // here instead, and say so plainly.
   const missing = describeMissingFields(proposal.actionType, args);
   if (missing.length) {
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId,
       actorId: actor.identityId, actorDid: actor.did, actorKind: actor.kind,
       action: "AI_PROPOSAL_INCOMPLETE", resourceType: "AGENT", resourceId: actor.agent?.id ?? actor.identityId,

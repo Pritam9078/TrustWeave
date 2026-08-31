@@ -1,4 +1,4 @@
-import { one, many, run, j } from "../db/client.js";
+import { one, many, run, j } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { hashObject, canonicalStringify, sha256Hex } from "../core/hash.js";
@@ -82,8 +82,8 @@ export function computeEventHash(input: {
   return `sha256:${sha256Hex(canonicalStringify(input))}`;
 }
 
-export function record(input: AuditInput): AuditEventRow {
-  const last = one<{ seq: number; event_hash: string }>(
+export async function record(input: AuditInput): Promise<AuditEventRow> {
+  const last = await one<{ seq: number; event_hash: string }>(
     `SELECT seq, event_hash FROM audit_events WHERE organization_id = ? ORDER BY seq DESC LIMIT 1`,
     input.organizationId,
   );
@@ -108,7 +108,7 @@ export function record(input: AuditInput): AuditEventRow {
   });
 
   const id = newId("aud");
-  run(
+  await run(
     `INSERT INTO audit_events
       (id, organization_id, seq, trace_id, actor_id, actor_did, actor_kind, action,
        resource_type, resource_id, decision, reason_codes, policy_id, policy_version,
@@ -121,10 +121,10 @@ export function record(input: AuditInput): AuditEventRow {
     prevEventHash, eventHash, input.ip ?? null, timestamp,
   );
 
-  return one<AuditEventRow>(
+  return (await one<AuditEventRow>(
     `SELECT * FROM audit_events WHERE organization_id = ? AND id = ?`,
     input.organizationId, id,
-  )!;
+  ))!;
 }
 
 export interface ChainVerification {
@@ -139,8 +139,8 @@ export interface ChainVerification {
  * Recompute the whole chain from genesis and report the first divergence. Called by
  * the Audit UI on every load and by `GET /api/audit/verify-chain`.
  */
-export function verifyChain(organizationId: string): ChainVerification {
-  const events = many<AuditEventRow>(
+export async function verifyChain(organizationId: string): Promise<ChainVerification> {
+  const events = await many<AuditEventRow>(
     `SELECT * FROM audit_events WHERE organization_id = ? ORDER BY seq ASC`,
     organizationId,
   );
@@ -199,7 +199,7 @@ export interface AuditQuery {
   offset?: number;
 }
 
-export function query(q: AuditQuery): { events: AuditEventRow[]; total: number } {
+export async function query(q: AuditQuery): Promise<{ events: AuditEventRow[]; total: number }> {
   const where: string[] = ["organization_id = ?"];
   const params: unknown[] = [q.organizationId];
   const add = (clause: string, value: unknown) => {
@@ -215,22 +215,22 @@ export function query(q: AuditQuery): { events: AuditEventRow[]; total: number }
   add("timestamp <= ?", q.to);
 
   const clause = where.join(" AND ");
-  const total = one<{ n: number }>(`SELECT COUNT(*) AS n FROM audit_events WHERE ${clause}`, ...params)?.n ?? 0;
+  const total = (await one<{ n: number }>(`SELECT COUNT(*) AS n FROM audit_events WHERE ${clause}`, ...params))?.n ?? 0;
   const limit = Math.min(q.limit ?? 50, 500);
   const offset = q.offset ?? 0;
-  const events = many<AuditEventRow>(
+  const events = await many<AuditEventRow>(
     `SELECT * FROM audit_events WHERE ${clause} ORDER BY seq DESC LIMIT ? OFFSET ?`,
     ...params, limit, offset,
   );
   return { events, total };
 }
 
-export function byId(organizationId: string, id: string): AuditEventRow | null {
-  return one<AuditEventRow>(`SELECT * FROM audit_events WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function byId(organizationId: string, id: string): Promise<AuditEventRow | null> {
+  return await one<AuditEventRow>(`SELECT * FROM audit_events WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
-export function byTrace(organizationId: string, traceId: string): AuditEventRow[] {
-  return many<AuditEventRow>(
+export async function byTrace(organizationId: string, traceId: string): Promise<AuditEventRow[]> {
+  return await many<AuditEventRow>(
     `SELECT * FROM audit_events WHERE organization_id = ? AND trace_id = ? ORDER BY seq ASC`,
     organizationId, traceId,
   );

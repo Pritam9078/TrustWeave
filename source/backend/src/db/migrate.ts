@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initDb, getDb, one, run, closeDb } from "./client.js";
+import { initDb, getDb, one, run, closeDb } from "./clientV2.js";
 import { nowIso } from "../core/time.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -9,18 +9,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 export async function migrate(file?: string): Promise<string[]> {
   await initDb(file);
   const db = getDb();
-  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
+  await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
 
   const dir = resolve(here, "migrations");
   const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
   const applied: string[] = [];
 
   for (const name of files) {
-    const already = one<{ name: string }>(`SELECT name FROM schema_migrations WHERE name = ?`, name);
+    const already = await one<{ name: string }>(`SELECT name FROM schema_migrations WHERE name = $1`, name);
     if (already) continue;
     const sql = readFileSync(join(dir, name), "utf8");
-    db.exec(sql);
-    run(`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, name, nowIso());
+    await db.query(sql); // This might have multiple statements
+    await run(`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, name, nowIso());
     applied.push(name);
   }
   return applied;

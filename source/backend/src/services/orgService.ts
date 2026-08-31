@@ -1,4 +1,4 @@
-import { one, many, run, tx } from "../db/client.js";
+import { one, many, run, tx } from "../db/clientV2.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { CAPABILITIES, capabilityId, isKnownCapability } from "../authorization/capabilities.js";
@@ -6,22 +6,22 @@ import { badRequest, conflict, notFound } from "../core/errors.js";
 
 /** Organizations, departments, roles, capabilities and scopes. */
 
-export function getOrganization(id: string) {
-  return one<any>(`SELECT * FROM organizations WHERE id = ?`, id);
+export async function getOrganization(id: string) {
+  return await one<any>(`SELECT * FROM organizations WHERE id = $1`, id);
 }
 
-export function listDepartments(organizationId: string) {
-  return many<any>(`SELECT * FROM departments WHERE organization_id = ? ORDER BY name`, organizationId);
+export async function listDepartments(organizationId: string) {
+  return await many<any>(`SELECT * FROM departments WHERE organization_id = $1 ORDER BY name`, organizationId);
 }
 
-export function createDepartment(organizationId: string, name: string, code: string) {
-  if (one(`SELECT id FROM departments WHERE organization_id = ? AND code = ?`, organizationId, code)) {
+export async function createDepartment(organizationId: string, name: string, code: string) {
+  if (await one(`SELECT id FROM departments WHERE organization_id = $1 AND code = $2`, organizationId, code)) {
     throw conflict("DEPARTMENT_EXISTS", `A department with code "${code}" already exists.`);
   }
   const id = newId("dept");
-  run(`INSERT INTO departments (id, organization_id, name, code, created_at) VALUES (?,?,?,?,?)`,
+  await run(`INSERT INTO departments (id, organization_id, name, code, created_at) VALUES ($1,$2,$3,$4,$5)`,
     id, organizationId, name, code, nowIso());
-  return one<any>(`SELECT * FROM departments WHERE id = ?`, id);
+  return await one<any>(`SELECT * FROM departments WHERE id = $1`, id);
 }
 
 /* -------------------------------------------------------------- capabilities */
@@ -32,67 +32,69 @@ export function createDepartment(organizationId: string, name: string, code: str
  * is never treated as a real capability by the engine (see authorization/engine.ts,
  * gate 1) even if it survives here.
  */
-export function syncCapabilityCatalog() {
+export async function syncCapabilityCatalog() {
   for (const cap of CAPABILITIES) {
     const id = capabilityId(cap.action);
-    const existing = one(`SELECT id FROM capabilities WHERE id = ?`, id);
+    const existing = await one(`SELECT id FROM capabilities WHERE id = $1`, id);
     if (existing) {
-      run(`UPDATE capabilities SET resource_type = ?, domain = ?, description = ?, is_privileged = ? WHERE id = ?`,
+      await run(`UPDATE capabilities SET resource_type = $1, domain = $2, description = $3, is_privileged = $4 WHERE id = $5`,
         cap.resourceType, cap.domain, cap.description, cap.isPrivileged ? 1 : 0, id);
     } else {
-      run(`INSERT INTO capabilities (id, action, resource_type, domain, description, is_privileged) VALUES (?,?,?,?,?,?)`,
+      await run(`INSERT INTO capabilities (id, action, resource_type, domain, description, is_privileged) VALUES ($1,$2,$3,$4,$5,$6)`,
         id, cap.action, cap.resourceType, cap.domain, cap.description, cap.isPrivileged ? 1 : 0);
     }
   }
 }
 
-export function listCapabilities() {
-  return many<any>(`SELECT * FROM capabilities ORDER BY domain, action`);
+export async function listCapabilities() {
+  return await many<any>(`SELECT * FROM capabilities ORDER BY domain, action`);
 }
 
 /* --------------------------------------------------------------------- roles */
 
-export function listRoles(organizationId: string) {
-  const roles = many<any>(`SELECT * FROM roles WHERE organization_id = ? ORDER BY name`, organizationId);
-  return roles.map((r) => ({ ...r, capabilities: roleCapabilities(r.id), scopes: roleScopes(r.id), memberCount: roleMemberCount(r.id) }));
+export async function listRoles(organizationId: string) {
+  const roles = await many<any>(`SELECT * FROM roles WHERE organization_id = ? ORDER BY name`, organizationId);
+  return Promise.all(roles.map(async (r) => ({ ...r, capabilities: await roleCapabilities(r.id), scopes: await roleScopes(r.id), memberCount: await roleMemberCount(r.id) })));
 }
 
-export function getRole(organizationId: string, id: string) {
-  const role = one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getRole(organizationId: string, id: string) {
+  const role = await one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, id);
   if (!role) return null;
-  return { ...role, capabilities: roleCapabilities(id), scopes: roleScopes(id), memberCount: roleMemberCount(id) };
+  return { ...role, capabilities: await roleCapabilities(id), scopes: await roleScopes(id), memberCount: await roleMemberCount(id) };
 }
 
-export function roleCapabilities(roleId: string): string[] {
-  return many<{ action: string }>(
+export async function roleCapabilities(roleId: string): Promise<string[]> {
+  const capabilities = await many<{ action: string }>(
     `SELECT c.action FROM capabilities c JOIN role_capabilities rc ON rc.capability_id = c.id WHERE rc.role_id = ? ORDER BY c.action`,
     roleId,
-  ).map((r) => r.action);
+  );
+  return capabilities.map((r) => r.action);
 }
 
-export function roleScopes(roleId: string) {
-  return many<any>(
+export async function roleScopes(roleId: string) {
+  return await many<any>(
     `SELECT s.* FROM scopes s JOIN role_scopes rs ON rs.scope_id = s.id WHERE rs.role_id = ?`,
     roleId,
   );
 }
 
-function roleMemberCount(roleId: string): number {
-  return one<{ n: number }>(`SELECT COUNT(*) AS n FROM membership_roles WHERE role_id = ?`, roleId)?.n ?? 0;
+async function roleMemberCount(roleId: string): Promise<number> {
+  const result = await one<{ n: number }>(`SELECT COUNT(*) AS n FROM membership_roles WHERE role_id = ?`, roleId);
+  return result?.n ?? 0;
 }
 
-export function createRole(organizationId: string, input: { name: string; description?: string; capabilities?: string[]; isSystem?: boolean }) {
-  if (one(`SELECT id FROM roles WHERE organization_id = ? AND name = ?`, organizationId, input.name)) {
+export async function createRole(organizationId: string, input: { name: string; description?: string; capabilities?: string[]; isSystem?: boolean }) {
+  if (await one(`SELECT id FROM roles WHERE organization_id = ? AND name = ?`, organizationId, input.name)) {
     throw conflict("ROLE_EXISTS", `A role named "${input.name}" already exists.`);
   }
   const id = newId("role");
   const ts = nowIso();
-  tx(() => {
-    run(`INSERT INTO roles (id, organization_id, name, description, version, is_system, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`,
+  await tx(async () => {
+    await run(`INSERT INTO roles (id, organization_id, name, description, version, is_system, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)`,
       id, organizationId, input.name, input.description ?? "", 1, input.isSystem ? 1 : 0, ts, ts);
-    for (const action of input.capabilities ?? []) attachCapability(id, action);
+    for (const action of input.capabilities ?? []) await attachCapability(id, action);
   });
-  return getRole(organizationId, id)!;
+  return await getRole(organizationId, id)!;
 }
 
 /**
@@ -100,54 +102,54 @@ export function createRole(organizationId: string, input: { name: string; descri
  * event references, so "which permissions did this role carry when that action was
  * allowed?" stays answerable after an edit.
  */
-export function setRoleCapabilities(organizationId: string, roleId: string, actions: string[]) {
-  const role = one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
+export async function setRoleCapabilities(organizationId: string, roleId: string, actions: string[]) {
+  const role = await one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
   if (!role) throw notFound("Role not found.");
   const unknown = actions.filter((a) => !isKnownCapability(a));
   if (unknown.length) throw badRequest("CAPABILITY_UNKNOWN", `Unknown capabilities: ${unknown.join(", ")}`);
 
-  tx(() => {
-    run(`DELETE FROM role_capabilities WHERE role_id = ?`, roleId);
-    for (const action of actions) attachCapability(roleId, action);
-    run(`UPDATE roles SET version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), roleId);
+  await tx(async () => {
+    await run(`DELETE FROM role_capabilities WHERE role_id = ?`, roleId);
+    for (const action of actions) await attachCapability(roleId, action);
+    await run(`UPDATE roles SET version = version + 1, updated_at = ? WHERE id = ?`, nowIso(), roleId);
   });
-  return getRole(organizationId, roleId)!;
+  return await getRole(organizationId, roleId)!;
 }
 
-function attachCapability(roleId: string, action: string) {
+async function attachCapability(roleId: string, action: string) {
   if (!isKnownCapability(action)) throw badRequest("CAPABILITY_UNKNOWN", `Unknown capability: ${action}`);
-  run(`INSERT OR IGNORE INTO role_capabilities (role_id, capability_id) VALUES (?,?)`, roleId, capabilityId(action));
+  await run(`INSERT INTO role_capabilities (role_id, capability_id) VALUES (?,?) ON CONFLICT DO NOTHING`, roleId, capabilityId(action));
 }
 
-export function updateRole(organizationId: string, roleId: string, patch: { name?: string; description?: string }) {
-  const role = one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
+export async function updateRole(organizationId: string, roleId: string, patch: { name?: string; description?: string }) {
+  const role = await one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
   if (!role) throw notFound("Role not found.");
-  run(`UPDATE roles SET name = ?, description = ?, updated_at = ? WHERE id = ?`,
+  await run(`UPDATE roles SET name = ?, description = ?, updated_at = ? WHERE id = ?`,
     patch.name ?? role.name, patch.description ?? role.description, nowIso(), roleId);
-  return getRole(organizationId, roleId)!;
+  return await getRole(organizationId, roleId)!;
 }
 
-export function deleteRole(organizationId: string, roleId: string) {
-  const role = one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
+export async function deleteRole(organizationId: string, roleId: string) {
+  const role = await one<any>(`SELECT * FROM roles WHERE organization_id = ? AND id = ?`, organizationId, roleId);
   if (!role) throw notFound("Role not found.");
   if (role.is_system) throw badRequest("SYSTEM_ROLE", "System roles cannot be deleted.");
-  const members = roleMemberCount(roleId);
+  const members = await roleMemberCount(roleId);
   if (members > 0) throw conflict("ROLE_IN_USE", `${members} member(s) still hold this role. Unassign them first.`);
-  tx(() => {
-    run(`DELETE FROM role_capabilities WHERE role_id = ?`, roleId);
-    run(`DELETE FROM role_scopes WHERE role_id = ?`, roleId);
-    run(`DELETE FROM roles WHERE id = ?`, roleId);
+  await tx(async () => {
+    await run(`DELETE FROM role_capabilities WHERE role_id = ?`, roleId);
+    await run(`DELETE FROM role_scopes WHERE role_id = ?`, roleId);
+    await run(`DELETE FROM roles WHERE id = ?`, roleId);
   });
 }
 
 /* -------------------------------------------------------------------- scopes */
 
-export function listScopes(organizationId: string) {
-  return many<any>(`SELECT * FROM scopes WHERE organization_id = ? ORDER BY name`, organizationId);
+export async function listScopes(organizationId: string) {
+  return await many<any>(`SELECT * FROM scopes WHERE organization_id = ? ORDER BY name`, organizationId);
 }
 
-export function getScope(organizationId: string, id: string) {
-  return one<any>(`SELECT * FROM scopes WHERE organization_id = ? AND id = ?`, organizationId, id);
+export async function getScope(organizationId: string, id: string) {
+  return await one<any>(`SELECT * FROM scopes WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
 const SCOPE_TYPES = ["ORGANIZATION", "DEPARTMENT", "COLLECTION", "RESOURCE", "VENDOR"];
@@ -225,46 +227,46 @@ export function normalizeSelector(scopeType: string, raw: unknown): Record<strin
   return { [key]: values };
 }
 
-export function createScope(organizationId: string, input: { name: string; scopeType: string; selector?: unknown; constraints?: unknown }) {
+export async function createScope(organizationId: string, input: { name: string; scopeType: string; selector?: unknown; constraints?: unknown }) {
   if (!SCOPE_TYPES.includes(input.scopeType)) {
     throw badRequest("INVALID_SCOPE_TYPE", `scopeType must be one of ${SCOPE_TYPES.join(", ")}.`);
   }
-  if (one(`SELECT id FROM scopes WHERE organization_id = ? AND name = ?`, organizationId, input.name)) {
+  if (await one(`SELECT id FROM scopes WHERE organization_id = ? AND name = ?`, organizationId, input.name)) {
     throw conflict("SCOPE_EXISTS", `A scope named "${input.name}" already exists.`);
   }
   const selector = normalizeSelector(input.scopeType, input.selector);
   const id = newId("scope");
-  run(`INSERT INTO scopes (id, organization_id, name, scope_type, selector_json, constraints_json, created_at) VALUES (?,?,?,?,?,?,?)`,
+  await run(`INSERT INTO scopes (id, organization_id, name, scope_type, selector_json, constraints_json, created_at) VALUES (?,?,?,?,?,?,?)`,
     id, organizationId, input.name, input.scopeType,
     JSON.stringify(selector), JSON.stringify(normalizeConstraints(input.constraints)), nowIso());
-  return getScope(organizationId, id)!;
+  return await getScope(organizationId, id)!;
 }
 
-export function updateScope(organizationId: string, id: string, patch: { name?: string; selector?: unknown; constraints?: unknown }) {
-  const scope = getScope(organizationId, id);
+export async function updateScope(organizationId: string, id: string, patch: { name?: string; selector?: unknown; constraints?: unknown }) {
+  const scope = await getScope(organizationId, id);
   if (!scope) throw notFound("Scope not found.");
-  run(`UPDATE scopes SET name = ?, selector_json = ?, constraints_json = ? WHERE id = ?`,
+  await run(`UPDATE scopes SET name = ?, selector_json = ?, constraints_json = ? WHERE id = ?`,
     patch.name ?? scope.name,
     patch.selector !== undefined ? JSON.stringify(normalizeSelector(scope.scope_type, patch.selector)) : scope.selector_json,
     patch.constraints !== undefined ? JSON.stringify(normalizeConstraints(patch.constraints)) : scope.constraints_json,
     id);
-  return getScope(organizationId, id)!;
+  return await getScope(organizationId, id)!;
 }
 
-export function attachScopeToRole(roleId: string, scopeId: string) {
-  run(`INSERT OR IGNORE INTO role_scopes (role_id, scope_id) VALUES (?,?)`, roleId, scopeId);
+export async function attachScopeToRole(roleId: string, scopeId: string) {
+  await run(`INSERT INTO role_scopes (role_id, scope_id) VALUES (?,?) ON CONFLICT DO NOTHING`, roleId, scopeId);
 }
 
-export function detachScopeFromRole(roleId: string, scopeId: string) {
-  run(`DELETE FROM role_scopes WHERE role_id = ? AND scope_id = ?`, roleId, scopeId);
+export async function detachScopeFromRole(roleId: string, scopeId: string) {
+  await run(`DELETE FROM role_scopes WHERE role_id = ? AND scope_id = ?`, roleId, scopeId);
 }
 
 /* --------------------------------------------------------- emergency controls */
 
 export const EMERGENCY_FLAGS = ["AGENTS_DISABLED", "PAYMENTS_DISABLED", "MINTING_DISABLED"] as const;
 
-export function listEmergencyFlags(organizationId: string) {
-  const rows = many<any>(`SELECT * FROM emergency_flags WHERE organization_id = ?`, organizationId);
+export async function listEmergencyFlags(organizationId: string) {
+  const rows = await many<any>(`SELECT * FROM emergency_flags WHERE organization_id = ?`, organizationId);
   const byKey = new Map(rows.map((r) => [r.flag_key, r]));
   return EMERGENCY_FLAGS.map((key) => {
     const row = byKey.get(key);
@@ -278,45 +280,46 @@ export function listEmergencyFlags(organizationId: string) {
   });
 }
 
-export function setEmergencyFlag(organizationId: string, flagKey: string, enabled: boolean, actorId: string, reason: string) {
+export async function setEmergencyFlag(organizationId: string, flagKey: string, enabled: boolean, actorId: string, reason: string) {
   if (!(EMERGENCY_FLAGS as readonly string[]).includes(flagKey)) {
     throw badRequest("UNKNOWN_FLAG", `Unknown emergency flag: ${flagKey}`);
   }
   const ts = nowIso();
-  const existing = one(`SELECT flag_key FROM emergency_flags WHERE organization_id = ? AND flag_key = ?`, organizationId, flagKey);
+  const existing = await one(`SELECT flag_key FROM emergency_flags WHERE organization_id = ? AND flag_key = ?`, organizationId, flagKey);
   if (existing) {
-    run(`UPDATE emergency_flags SET enabled = ?, reason = ?, actor_id = ?, updated_at = ? WHERE organization_id = ? AND flag_key = ?`,
+    await run(`UPDATE emergency_flags SET enabled = ?, reason = ?, actor_id = ?, updated_at = ? WHERE organization_id = ? AND flag_key = ?`,
       enabled ? 1 : 0, reason, actorId, ts, organizationId, flagKey);
   } else {
-    run(`INSERT INTO emergency_flags (organization_id, flag_key, enabled, reason, actor_id, updated_at) VALUES (?,?,?,?,?,?)`,
+    await run(`INSERT INTO emergency_flags (organization_id, flag_key, enabled, reason, actor_id, updated_at) VALUES (?,?,?,?,?,?)`,
       organizationId, flagKey, enabled ? 1 : 0, reason, actorId, ts);
   }
-  return listEmergencyFlags(organizationId).find((f) => f.flagKey === flagKey)!;
+  const flags = await listEmergencyFlags(organizationId);
+  return flags.find((f) => f.flagKey === flagKey)!;
 }
 
 /* ---------------------------------------------------------- security events */
 
-export function recordSecurityEvent(input: {
+export async function recordSecurityEvent(input: {
   organizationId: string; kind: string; severity?: string;
   actorId?: string | null; summary: string; detail?: Record<string, unknown>;
 }) {
   const id = newId("sec");
-  run(`INSERT INTO security_events (id, organization_id, kind, severity, actor_id, summary, detail_json, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+  await run(`INSERT INTO security_events (id, organization_id, kind, severity, actor_id, summary, detail_json, created_at) VALUES (?,?,?,?,?,?,?,?)`,
     id, input.organizationId, input.kind, input.severity ?? "MEDIUM",
     input.actorId ?? null, input.summary, JSON.stringify(input.detail ?? {}), nowIso());
-  return one<any>(`SELECT * FROM security_events WHERE organization_id = ? AND id = ?`, input.organizationId, id);
+  return await one<any>(`SELECT * FROM security_events WHERE organization_id = ? AND id = ?`, input.organizationId, id);
 }
 
-export function listSecurityEvents(organizationId: string, limit = 100) {
-  return many<any>(`SELECT * FROM security_events WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?`, organizationId, limit);
+export async function listSecurityEvents(organizationId: string, limit = 100) {
+  return await many<any>(`SELECT * FROM security_events WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?`, organizationId, limit);
 }
 
-export function acknowledgeSecurityEvent(organizationId: string, id: string) {
-  run(`UPDATE security_events SET acknowledged_at = ? WHERE organization_id = ? AND id = ?`, nowIso(), organizationId, id);
+export async function acknowledgeSecurityEvent(organizationId: string, id: string) {
+  await run(`UPDATE security_events SET acknowledged_at = ? WHERE organization_id = ? AND id = ?`, nowIso(), organizationId, id);
   // Read back with the tenant predicate too. The UPDATE above is correctly scoped, so an
   // id from another organization changes nothing — but an unscoped read-back would still
   // hand that row to the caller. The current route discards this value, which means the
   // leak is latent rather than live; it is exactly the kind of thing that becomes real
   // the moment someone starts returning it.
-  return one<any>(`SELECT * FROM security_events WHERE organization_id = ? AND id = ?`, organizationId, id);
+  return await one<any>(`SELECT * FROM security_events WHERE organization_id = ? AND id = ?`, organizationId, id);
 }

@@ -390,12 +390,15 @@ CREATE TABLE IF NOT EXISTS documents (
   updated_at      TEXT NOT NULL
 );
 
+-- Supabase pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS document_chunks (
   id            TEXT PRIMARY KEY,
   document_id   TEXT NOT NULL REFERENCES documents(id),
   ordinal       INTEGER NOT NULL,
   content       TEXT NOT NULL,
-  embedding_json TEXT NOT NULL DEFAULT '[]',
+  embedding     vector(256),
   created_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);

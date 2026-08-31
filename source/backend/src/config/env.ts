@@ -31,6 +31,7 @@ export const env = {
   PORT: num(process.env.PORT, 4000),
   LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
   DATABASE_FILE: process.env.DATABASE_FILE ?? "./trustweave.db",
+  DATABASE_URL: process.env.DATABASE_URL ?? "",
   CORS_ORIGIN: process.env.CORS_ORIGIN ?? "http://localhost:5173,http://127.0.0.1:5173",
   HOST: process.env.HOST ?? "0.0.0.0",
   RATE_LIMIT_MAX: num(process.env.RATE_LIMIT_MAX, 600),

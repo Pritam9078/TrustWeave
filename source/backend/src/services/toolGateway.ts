@@ -1,4 +1,4 @@
-import { run, j, one } from "../db/client.js";
+import { run, j, one } from "../db/clientV2.js";
 import { newId, newTraceId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { getTool } from "./toolRegistry.js";
@@ -57,10 +57,10 @@ export async function invoke(params: {
   const traceId = params.traceId ?? newTraceId();
   const started = Date.now();
 
-  const finish = (result: Omit<ToolCallResult, "traceId" | "tool">): ToolCallResult => {
+  const finish = async (result: Omit<ToolCallResult, "traceId" | "tool">): Promise<ToolCallResult> => {
     const full: ToolCallResult = { ...result, traceId, tool: toolName };
     if (actor.agent) {
-      run(
+      await run(
         `INSERT INTO agent_tool_calls (id, agent_id, trace_id, tool_name, args_json, decision, reason_codes, result_ref, latency_ms, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
         newId("tool"), actor.agent.id, traceId, toolName, j.enc(params.args ?? {}),
@@ -73,7 +73,7 @@ export async function invoke(params: {
   // ---- Step 2: closed allowlist ----
   const tool = getTool(toolName);
   if (!tool) {
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId, actorId: actor.identityId, actorDid: actor.did,
       actorKind: actor.kind, action: "TOOL_CALL", resourceType: "TOOL", resourceId: toolName,
       decision: "DENY", reasonCodes: ["TOOL_UNKNOWN"],
@@ -85,7 +85,7 @@ export async function invoke(params: {
       summary: `Agent requested an unregistered tool "${toolName}".`,
       detail: { toolName, args: params.args },
     });
-    return finish({
+    return await finish({
       ok: false, decision: "DENY", reasonCodes: ["TOOL_UNKNOWN"],
       message: `"${toolName}" is not a registered tool.`, data: null, evaluation: [],
     });
@@ -93,13 +93,13 @@ export async function invoke(params: {
 
   // ---- Step 3: this agent's allowlist ----
   if (actor.kind === "AGENT" && actor.agent && !actor.agent.tools.includes(toolName)) {
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId, actorId: actor.identityId, actorDid: actor.did,
       actorKind: actor.kind, action: "TOOL_CALL", resourceType: "TOOL", resourceId: toolName,
       decision: "DENY", reasonCodes: ["AGENT_TOOL_NOT_ALLOWED"],
       payload: { allowlist: actor.agent.tools },
     });
-    return finish({
+    return await finish({
       ok: false, decision: "DENY", reasonCodes: ["AGENT_TOOL_NOT_ALLOWED"],
       message: DENY_MESSAGES.AGENT_TOOL_NOT_ALLOWED, data: null, evaluation: [],
     });
@@ -108,13 +108,13 @@ export async function invoke(params: {
   // ---- Step 4: strict argument validation ----
   const parsed = tool.schema.safeParse(params.args ?? {});
   if (!parsed.success) {
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId, actorId: actor.identityId, actorDid: actor.did,
       actorKind: actor.kind, action: "TOOL_CALL", resourceType: "TOOL", resourceId: toolName,
       decision: "DENY", reasonCodes: ["INVALID_ARGUMENTS"],
       payload: { issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) },
     });
-    return finish({
+    return await finish({
       ok: false, decision: "DENY", reasonCodes: ["INVALID_ARGUMENTS"],
       message: "Tool arguments failed schema validation.",
       data: { issues: parsed.error.issues }, evaluation: [],
@@ -123,8 +123,8 @@ export async function invoke(params: {
   const args = parsed.data as any;
 
   // ---- Step 5: re-authorize centrally ----
-  const resource = describeResource(actor, tool.resourceType, args);
-  const authResult = authz.check({
+  const resource = await describeResource(actor, tool.resourceType, args);
+  const authResult = await authz.check({
     actor,
     action: tool.capability,
     resource,
@@ -138,7 +138,7 @@ export async function invoke(params: {
     traceId,
   });
 
-  audit.record({
+  await audit.record({
     organizationId: actor.organizationId, traceId, actorId: actor.identityId, actorDid: actor.did,
     actorKind: actor.kind, action: "TOOL_CALL", resourceType: "TOOL", resourceId: toolName,
     decision: authResult.decision, reasonCodes: authResult.reasonCodes,
@@ -157,7 +157,7 @@ export async function invoke(params: {
       });
     }
     const primary = authResult.reasonCodes[0] ?? "POLICY_VIOLATION";
-    return finish({
+    return await finish({
       ok: false, decision: "DENY", reasonCodes: authResult.reasonCodes,
       message: (DENY_MESSAGES as any)[primary] ?? "This action is not permitted.",
       data: null, evaluation: authResult.evaluation,
@@ -167,7 +167,7 @@ export async function invoke(params: {
   // ---- Steps 6-7: execute (or hold), then audit ----
   try {
     const outcome = await execute(actor, tool.name, args, traceId, authResult);
-    return finish({
+    return await finish({
       ok: outcome.decision !== "DENY",
       decision: outcome.decision,
       reasonCodes: authResult.reasonCodes,
@@ -177,22 +177,22 @@ export async function invoke(params: {
       approvalId: outcome.approvalId ?? null,
     });
   } catch (err: any) {
-    audit.record({
+    await audit.record({
       organizationId: actor.organizationId, traceId, actorId: actor.identityId, actorDid: actor.did,
       actorKind: actor.kind, action: "TOOL_EXECUTION_FAILED", resourceType: "TOOL", resourceId: toolName,
       decision: "FAILED", reasonCodes: ["EXECUTION_ERROR"],
       payload: { error: String(err?.message ?? err) },
     });
-    return finish({
+    return await finish({
       ok: false, decision: "DENY", reasonCodes: ["EXECUTION_ERROR"],
       message: String(err?.message ?? err), data: null, evaluation: authResult.evaluation,
     });
   }
 }
 
-function describeResource(actor: ActorContext, resourceType: string, args: any) {
+async function describeResource(actor: ActorContext, resourceType: string, args: any) {
   if (resourceType === "ASSET" && args.assetId) {
-    const asset = one<any>(`SELECT * FROM assets WHERE id = ? AND organization_id = ?`, args.assetId, actor.organizationId);
+    const asset = await one<any>(`SELECT * FROM assets WHERE id = ? AND organization_id = ?`, args.assetId, actor.organizationId);
     return {
       type: "ASSET", id: args.assetId,
       organizationId: asset?.organization_id ?? actor.organizationId,
@@ -239,7 +239,7 @@ async function execute(
 ): Promise<{ decision: "ALLOW" | "DENY" | "REQUIRE_APPROVAL"; message: string; data: unknown; approvalId?: string | null }> {
   switch (toolName) {
     case "search_knowledge": {
-      const result = ragService.retrieveForActor(actor, args.query, args.limit ?? 5);
+      const result = await ragService.retrieveForActor(actor, args.query, args.limit ?? 5);
       return {
         decision: "ALLOW",
         message: `Retrieved ${result.chunks.length} chunk(s) from ${result.filtered.accessibleDocuments} accessible document(s).`,
@@ -247,7 +247,7 @@ async function execute(
       };
     }
     case "get_invoice": {
-      const result = ragService.retrieveForActor(actor, args.invoiceRef, 3);
+      const result = await ragService.retrieveForActor(actor, args.invoiceRef, 3);
       return {
         decision: "ALLOW",
         message: result.chunks.length ? `Found ${result.chunks.length} matching passage(s).` : "No accessible document matched that invoice reference.",
@@ -255,17 +255,17 @@ async function execute(
       };
     }
     case "get_asset": {
-      const asset = assetService.getAsset(actor.organizationId, args.assetId);
+      const asset = await (assetService as any).getAsset(actor.organizationId, args.assetId); // cast to any until assetService is made async
       if (!asset) return { decision: "DENY", message: "Asset not found.", data: null };
-      return { decision: "ALLOW", message: "Asset retrieved.", data: assetService.toApi(asset) };
+      return { decision: "ALLOW", message: "Asset retrieved.", data: (assetService as any).toApi(asset) };
     }
     case "get_policy": {
-      const policy = policyService.getPolicy(actor.organizationId, args.policyId);
+      const policy = await (policyService as any).getPolicy(actor.organizationId, args.policyId); // cast to any until policyService is made async
       if (!policy) return { decision: "DENY", message: "Policy not found.", data: null };
-      return { decision: "ALLOW", message: "Policy retrieved.", data: policyService.toApi(policy) };
+      return { decision: "ALLOW", message: "Policy retrieved.", data: (policyService as any).toApi(policy) };
     }
     case "create_payment_intent": {
-      const { intent } = paymentService.createIntent(actor, {
+      const { intent } = await paymentService.createIntent(actor, {
         merchant: args.merchant, amount: args.amount, currency: args.currency,
         purpose: args.purpose, invoiceRef: args.invoiceRef ?? null,
         evidence: args.evidenceIds ?? [], agentId: actor.agent?.id ?? null,
@@ -273,7 +273,7 @@ async function execute(
       // Authorization runs again inside authorizeIntent against the *stored* row — the
       // gateway's own check used the same numbers, but re-reading from the row is what
       // guarantees the executed amount equals the authorized amount.
-      const authorized = paymentService.authorizeIntent(actor, intent.id);
+      const authorized = await paymentService.authorizeIntent(actor, intent.id);
       if (authorized.decision === "DENY") {
         return { decision: "DENY", message: `Payment denied: ${authorized.reasonCodes?.join(", ")}.`, data: paymentService.toApi(authorized.intent) };
       }
@@ -282,7 +282,7 @@ async function execute(
           decision: "REQUIRE_APPROVAL",
           message: "Payment requires human approval and has been sent to the Approval Center.",
           data: paymentService.toApi(authorized.intent),
-          approvalId: authorized.approval?.id ?? null,
+          approvalId: (await authorized.approval)?.id ?? null,
         };
       }
       return { decision: "ALLOW", message: "Payment intent authorized and ready to execute.", data: paymentService.toApi(authorized.intent) };
@@ -290,7 +290,7 @@ async function execute(
     case "request_asset_transfer": {
       // An agent never performs a transfer directly. It raises a request that a human
       // with ASSET_TRANSFER must approve — the asset equivalent of the payment hold.
-      const approval = (await import("./approvalService.js")).createApproval({
+      const approval = await (await import("./approvalService.js")).createApproval({
         organizationId: actor.organizationId,
         requestType: "ASSET_TRANSFER", requestId: args.assetId,
         requestedBy: actor.identityId,
@@ -303,8 +303,8 @@ async function execute(
       return {
         decision: "REQUIRE_APPROVAL",
         message: "Asset transfer proposed. A human with ASSET_TRANSFER must approve it.",
-        data: { approvalId: approval.id, assetId: args.assetId, newOwnerDid: args.newOwnerDid },
-        approvalId: approval.id,
+        data: { approvalId: (await approval).id, assetId: args.assetId, newOwnerDid: args.newOwnerDid },
+        approvalId: (await approval).id,
       };
     }
     default:

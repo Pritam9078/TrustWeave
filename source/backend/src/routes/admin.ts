@@ -10,7 +10,7 @@ import * as audit from "../services/auditService.js";
 import { CAPABILITIES } from "../authorization/capabilities.js";
 import { notFound, badRequest } from "../core/errors.js";
 import { newTraceId } from "../core/ids.js";
-import { one, many } from "../db/client.js";
+import { one, many } from "../db/clientV2.js";
 
 /**
  * Identity & Access, Roles, Capabilities, Scopes, Policies, Organization, Security.
@@ -23,7 +23,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/api/identities", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "IDENTITY_READ", resource: { type: "IDENTITY", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "IDENTITY_READ", resource: { type: "IDENTITY", query: true }, ip: req.ip });
     const q = req.query as any;
 
     // Row-level visibility, using the same scope machinery as assets rather than an
@@ -32,15 +32,22 @@ export async function adminRoutes(app: FastifyInstance) {
     // department falls inside their own assigned scopes. A plain User therefore sees
     // their own team, never the whole organization.
     const isAccessAdmin = actor.capabilities.has("IDENTITY_CREATE") || actor.capabilities.has("ROLE_ASSIGN");
-    const rows = identityService.listIdentities(actor.organizationId, q);
-    const visible = isAccessAdmin ? rows : rows.filter((row: any) => {
-      if (row.id === actor.identityId) return true; // always see yourself
-      const membership = identityService.getMembership(row.id, actor.organizationId);
-      return authz.check({
-        actor, action: "IDENTITY_READ",
-        resource: { type: "IDENTITY", id: row.id, organizationId: actor.organizationId, departmentId: membership?.department_id ?? null },
-      }).decision !== "DENY";
-    });
+    const rows = await identityService.listIdentities(actor.organizationId, q);
+    const visible = [];
+    if (isAccessAdmin) {
+      visible.push(...rows);
+    } else {
+      for (const row of rows) {
+        if (row.id === actor.identityId) { visible.push(row); continue; }
+        const membership = await identityService.getMembership(row.id, actor.organizationId);
+        if ((await authz.check({
+          actor, action: "IDENTITY_READ",
+          resource: { type: "IDENTITY", id: row.id, organizationId: actor.organizationId, departmentId: membership?.department_id ?? null },
+        })).decision !== "DENY") {
+          visible.push(row);
+        }
+      }
+    }
 
     return {
       identities: visible.map(identityService.toApiIdentity),
@@ -52,37 +59,37 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/api/identities/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "IDENTITY_READ", resource: { type: "IDENTITY", id }, ip: req.ip });
+    await authz.enforce({ actor, action: "IDENTITY_READ", resource: { type: "IDENTITY", id }, ip: req.ip });
     const identity = identityService.getIdentity(actor.organizationId, id);
     if (!identity) throw notFound("Identity not found.");
-    const perms = identityService.effectivePermissions(id, actor.organizationId);
-    const membership = identityService.getMembership(id, actor.organizationId);
+    const perms = await identityService.effectivePermissions(id, actor.organizationId);
+    const membership = await identityService.getMembership(id, actor.organizationId);
     return {
       identity: identityService.toApiIdentity(identity),
       membership: membership ? { id: membership.id, departmentId: membership.department_id, status: membership.status } : null,
       effectivePermissions: perms,
-      recentActivity: audit.query({ organizationId: actor.organizationId, actorId: id, limit: 25 }).events.map(audit.toApi),
+      recentActivity: (await audit.query({ organizationId: actor.organizationId, actorId: id, limit: 25 })).events.map(audit.toApi),
     };
   });
 
   app.post("/api/identities", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createIdentity, req.body);
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "IDENTITY_CREATE", resource: { type: "IDENTITY" }, ip: req.ip,
       payload: { displayName: body.displayName, kind: body.kind },
     });
 
-    const { identity, privateKey } = identityService.createIdentity({
+    const { identity, privateKey } = await identityService.createIdentity({
       organizationId: actor.organizationId,
       displayName: body.displayName, email: body.email?.toLowerCase() ?? null,
       kind: body.kind, did: body.did, departmentId: body.departmentId ?? null,
       password: body.password, status: "ACTIVE",
     });
 
-    const membership = identityService.getMembership(identity.id, actor.organizationId)!;
-    for (const roleId of body.roleIds) identityService.assignRole(membership.id, roleId, actor.identityId);
-    for (const scopeId of body.scopeIds) identityService.assignScopeToMembership(membership.id, scopeId);
+    const membership = (await identityService.getMembership(identity.id, actor.organizationId))!;
+    for (const roleId of body.roleIds) await identityService.assignRole(membership.id, roleId, actor.identityId);
+    for (const scopeId of body.scopeIds) await identityService.assignScopeToMembership(membership.id, scopeId);
 
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId,
@@ -111,8 +118,8 @@ export async function adminRoutes(app: FastifyInstance) {
       throw badRequest("SELF_LOCKOUT", "You cannot suspend or revoke your own identity. Ask another administrator.");
     }
 
-    const enforcement = authz.enforce({ actor, action, resource: { type: "IDENTITY", id }, ip: req.ip, payload: { status: body.status, reason: body.reason } });
-    const updated = identityService.setIdentityStatus(actor.organizationId, id, body.status);
+    const enforcement = await authz.enforce({ actor, action, resource: { type: "IDENTITY", id }, ip: req.ip, payload: { status: body.status, reason: body.reason } });
+    const updated = await identityService.setIdentityStatus(actor.organizationId, id, body.status);
 
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId,
@@ -128,11 +135,11 @@ export async function adminRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const { roleId } = req.body as { roleId: string };
     if (!roleId) throw badRequest("ROLE_REQUIRED", "roleId is required.");
-    const enforcement = authz.enforce({ actor, action: "ROLE_ASSIGN", resource: { type: "MEMBERSHIP", id }, ip: req.ip, payload: { roleId } });
+    const enforcement = await authz.enforce({ actor, action: "ROLE_ASSIGN", resource: { type: "MEMBERSHIP", id }, ip: req.ip, payload: { roleId } });
 
-    const membership = identityService.getMembership(id, actor.organizationId);
+    const membership = await identityService.getMembership(id, actor.organizationId);
     if (!membership) throw notFound("Membership not found.");
-    identityService.assignRole(membership.id, roleId, actor.identityId);
+    await identityService.assignRole(membership.id, roleId, actor.identityId);
 
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId,
@@ -140,22 +147,22 @@ export async function adminRoutes(app: FastifyInstance) {
       action: "ROLE_ASSIGNED", resourceType: "MEMBERSHIP", resourceId: id,
       decision: "EXECUTED", payload: { roleId },
     });
-    return { effectivePermissions: identityService.effectivePermissions(id, actor.organizationId) };
+    return { effectivePermissions: await identityService.effectivePermissions(id, actor.organizationId) };
   });
 
   app.delete("/api/identities/:id/roles/:roleId", async (req) => {
     const actor = requireHuman(req);
     const { id, roleId } = req.params as { id: string; roleId: string };
-    const enforcement = authz.enforce({ actor, action: "ROLE_ASSIGN", resource: { type: "MEMBERSHIP", id }, ip: req.ip });
-    const membership = identityService.getMembership(id, actor.organizationId);
+    const enforcement = await authz.enforce({ actor, action: "ROLE_ASSIGN", resource: { type: "MEMBERSHIP", id }, ip: req.ip });
+    const membership = await identityService.getMembership(id, actor.organizationId);
     if (!membership) throw notFound("Membership not found.");
-    identityService.removeRole(membership.id, roleId);
+    await identityService.removeRole(membership.id, roleId);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "ROLE_REMOVED", resourceType: "MEMBERSHIP", resourceId: id,
       decision: "EXECUTED", payload: { roleId },
     });
-    return { effectivePermissions: identityService.effectivePermissions(id, actor.organizationId) };
+    return { effectivePermissions: await identityService.effectivePermissions(id, actor.organizationId) };
   });
 
   app.post("/api/identities/:id/scopes", async (req) => {
@@ -163,57 +170,57 @@ export async function adminRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const { scopeId } = req.body as { scopeId: string };
     if (!scopeId) throw badRequest("SCOPE_REQUIRED", "scopeId is required.");
-    const enforcement = authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "SCOPE", id: scopeId }, ip: req.ip });
-    const membership = identityService.getMembership(id, actor.organizationId);
+    const enforcement = await authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "SCOPE", id: scopeId }, ip: req.ip });
+    const membership = await identityService.getMembership(id, actor.organizationId);
     if (!membership) throw notFound("Membership not found.");
-    identityService.assignScopeToMembership(membership.id, scopeId);
+    await identityService.assignScopeToMembership(membership.id, scopeId);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "SCOPE_ASSIGNED", resourceType: "MEMBERSHIP", resourceId: id,
       decision: "EXECUTED", payload: { scopeId },
     });
-    return { effectivePermissions: identityService.effectivePermissions(id, actor.organizationId) };
+    return { effectivePermissions: await identityService.effectivePermissions(id, actor.organizationId) };
   });
 
   app.delete("/api/identities/:id/scopes/:scopeId", async (req) => {
     const actor = requireHuman(req);
     const { id, scopeId } = req.params as { id: string; scopeId: string };
-    authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "SCOPE", id: scopeId }, ip: req.ip });
-    const membership = identityService.getMembership(id, actor.organizationId);
+    await authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "SCOPE", id: scopeId }, ip: req.ip });
+    const membership = await identityService.getMembership(id, actor.organizationId);
     if (!membership) throw notFound("Membership not found.");
-    identityService.removeScopeFromMembership(membership.id, scopeId);
-    return { effectivePermissions: identityService.effectivePermissions(id, actor.organizationId) };
+    await identityService.removeScopeFromMembership(membership.id, scopeId);
+    return { effectivePermissions: await identityService.effectivePermissions(id, actor.organizationId) };
   });
 
   app.patch("/api/identities/:id/department", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const { departmentId } = req.body as { departmentId: string | null };
-    authz.enforce({ actor, action: "IDENTITY_UPDATE", resource: { type: "IDENTITY", id }, ip: req.ip });
-    const membership = identityService.getMembership(id, actor.organizationId);
+    await authz.enforce({ actor, action: "IDENTITY_UPDATE", resource: { type: "IDENTITY", id }, ip: req.ip });
+    const membership = await identityService.getMembership(id, actor.organizationId);
     if (!membership) throw notFound("Membership not found.");
-    identityService.setMembershipDepartment(membership.id, departmentId ?? null);
-    return { effectivePermissions: identityService.effectivePermissions(id, actor.organizationId) };
+    await identityService.setMembershipDepartment(membership.id, departmentId ?? null);
+    return { effectivePermissions: await identityService.effectivePermissions(id, actor.organizationId) };
   });
 
   /* ------------------------------------------------------ roles & capabilities */
 
   app.get("/api/capabilities", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "CAPABILITY_READ", resource: { type: "CAPABILITY", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "CAPABILITY_READ", resource: { type: "CAPABILITY", query: true }, ip: req.ip });
     return { capabilities: CAPABILITIES };
   });
 
   app.get("/api/roles", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", query: true }, ip: req.ip });
     return { roles: orgService.listRoles(actor.organizationId) };
   });
 
   app.get("/api/roles/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", id }, ip: req.ip });
+    await authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", id }, ip: req.ip });
     const role = orgService.getRole(actor.organizationId, id);
     if (!role) throw notFound("Role not found.");
     const members = many<any>(
@@ -227,11 +234,11 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/api/roles", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createRole, req.body);
-    const enforcement = authz.enforce({ actor, action: "ROLE_CREATE", resource: { type: "ROLE" }, ip: req.ip, payload: { name: body.name } });
+    const enforcement = await authz.enforce({ actor, action: "ROLE_CREATE", resource: { type: "ROLE" }, ip: req.ip, payload: { name: body.name } });
     const role = orgService.createRole(actor.organizationId, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
-      actorDid: actor.did, action: "ROLE_CREATED", resourceType: "ROLE", resourceId: role.id,
+      actorDid: actor.did, action: "ROLE_CREATED", resourceType: "ROLE", resourceId: (await role).id,
       decision: "EXECUTED", payload: { name: body.name, capabilities: body.capabilities },
     });
     return reply.code(201).send({ role });
@@ -241,16 +248,16 @@ export async function adminRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const body = validate(S.updateRole, req.body);
-    const enforcement = authz.enforce({ actor, action: "ROLE_UPDATE", resource: { type: "ROLE", id }, ip: req.ip });
+    const enforcement = await authz.enforce({ actor, action: "ROLE_UPDATE", resource: { type: "ROLE", id }, ip: req.ip });
 
-    const before = orgService.getRole(actor.organizationId, id);
+    const before = await orgService.getRole(actor.organizationId, id);
     if (!before) throw notFound("Role not found.");
-    if (body.name || body.description !== undefined) orgService.updateRole(actor.organizationId, id, body);
+    if (body.name || body.description !== undefined) await orgService.updateRole(actor.organizationId, id, body);
     if (body.capabilities) {
-      authz.enforce({ actor, action: "CAPABILITY_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
-      orgService.setRoleCapabilities(actor.organizationId, id, body.capabilities);
+      await authz.enforce({ actor, action: "CAPABILITY_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
+      await orgService.setRoleCapabilities(actor.organizationId, id, body.capabilities);
     }
-    const after = orgService.getRole(actor.organizationId, id)!;
+    const after = (await orgService.getRole(actor.organizationId, id))!;
 
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
@@ -270,8 +277,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.delete("/api/roles/:id", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    const enforcement = authz.enforce({ actor, action: "ROLE_UPDATE", resource: { type: "ROLE", id }, ip: req.ip });
-    orgService.deleteRole(actor.organizationId, id);
+    const enforcement = await authz.enforce({ actor, action: "ROLE_UPDATE", resource: { type: "ROLE", id }, ip: req.ip });
+    await orgService.deleteRole(actor.organizationId, id);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "ROLE_DELETED", resourceType: "ROLE", resourceId: id, decision: "EXECUTED",
@@ -283,32 +290,33 @@ export async function adminRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
     const { scopeId } = req.body as { scopeId: string };
-    authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
-    orgService.attachScopeToRole(id, scopeId);
-    return { role: orgService.getRole(actor.organizationId, id) };
+    await authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
+    await orgService.attachScopeToRole(id, scopeId);
+    return { role: await orgService.getRole(actor.organizationId, id) };
   });
 
   app.delete("/api/roles/:id/scopes/:scopeId", async (req) => {
     const actor = requireHuman(req);
     const { id, scopeId } = req.params as { id: string; scopeId: string };
-    authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
-    orgService.detachScopeFromRole(id, scopeId);
-    return { role: orgService.getRole(actor.organizationId, id) };
+    await authz.enforce({ actor, action: "SCOPE_ASSIGN", resource: { type: "ROLE", id }, ip: req.ip });
+    await orgService.detachScopeFromRole(id, scopeId);
+    return { role: await orgService.getRole(actor.organizationId, id) };
   });
 
   /* -------------------------------------------------------------------- scopes */
 
   app.get("/api/scopes", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "SCOPE_READ", resource: { type: "SCOPE", query: true }, ip: req.ip });
-    return { scopes: orgService.listScopes(actor.organizationId).map(authz.toScopeRecord) };
+    await authz.enforce({ actor, action: "SCOPE_READ", resource: { type: "SCOPE", query: true }, ip: req.ip });
+    const scopes = await orgService.listScopes(actor.organizationId);
+    return { scopes: scopes.map(authz.toScopeRecord) };
   });
 
   app.post("/api/scopes", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createScope, req.body);
-    const enforcement = authz.enforce({ actor, action: "SCOPE_CREATE", resource: { type: "SCOPE" }, ip: req.ip, payload: { name: body.name } });
-    const scope = orgService.createScope(actor.organizationId, body);
+    const enforcement = await authz.enforce({ actor, action: "SCOPE_CREATE", resource: { type: "SCOPE" }, ip: req.ip, payload: { name: body.name } });
+    const scope = await orgService.createScope(actor.organizationId, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "SCOPE_CREATED", resourceType: "SCOPE", resourceId: scope.id,
@@ -320,8 +328,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.patch("/api/scopes/:id", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "SCOPE_CREATE", resource: { type: "SCOPE", id }, ip: req.ip });
-    const scope = orgService.updateScope(actor.organizationId, id, req.body as any);
+    await authz.enforce({ actor, action: "SCOPE_CREATE", resource: { type: "SCOPE", id }, ip: req.ip });
+    const scope = await orgService.updateScope(actor.organizationId, id, req.body as any);
     return { scope: authz.toScopeRecord(scope) };
   });
 
@@ -329,29 +337,29 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/api/policies", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "POLICY_READ", resource: { type: "POLICY", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "POLICY_READ", resource: { type: "POLICY", query: true }, ip: req.ip });
     const q = req.query as any;
-    return { policies: policyService.listPolicies(actor.organizationId, { status: q.status, includeAllVersions: q.allVersions === "true" }).map(policyService.toApi) };
+    return { policies: (await policyService.listPolicies(actor.organizationId, { status: q.status, includeAllVersions: q.allVersions === "true" })).map(policyService.toApi) };
   });
 
   app.get("/api/policies/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "POLICY_READ", resource: { type: "POLICY", id }, ip: req.ip });
-    const policy = policyService.getPolicy(actor.organizationId, id);
+    await authz.enforce({ actor, action: "POLICY_READ", resource: { type: "POLICY", id }, ip: req.ip });
+    const policy = await policyService.getPolicy(actor.organizationId, id);
     if (!policy) throw notFound("Policy not found.");
     return {
       policy: policyService.toApi(policy),
-      versions: policyService.policyVersions(actor.organizationId, policy.policy_key).map(policyService.toApi),
-      decisionHistory: policyService.decisionHistory(actor.organizationId, id),
+      versions: (await policyService.policyVersions(actor.organizationId, policy.policy_key)).map(policyService.toApi),
+      decisionHistory: await policyService.decisionHistory(actor.organizationId, id),
     };
   });
 
   app.post("/api/policies", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createPolicy, req.body);
-    const enforcement = authz.enforce({ actor, action: "POLICY_CREATE", resource: { type: "POLICY" }, ip: req.ip, payload: { policyKey: body.policyKey } });
-    const { policy, warnings } = policyService.createPolicy(actor.organizationId, actor.identityId, body);
+    const enforcement = await authz.enforce({ actor, action: "POLICY_CREATE", resource: { type: "POLICY" }, ip: req.ip, payload: { policyKey: body.policyKey } });
+    const { policy, warnings } = await policyService.createPolicy(actor.organizationId, actor.identityId, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "POLICY_CREATED", resourceType: "POLICY", resourceId: policy.id,
@@ -365,8 +373,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const actor = requireHuman(req);
     const { policyKey } = req.params as { policyKey: string };
     const body = validate(S.newPolicyVersion, req.body);
-    const enforcement = authz.enforce({ actor, action: "POLICY_UPDATE", resource: { type: "POLICY", id: policyKey }, ip: req.ip });
-    const { policy, warnings } = policyService.createVersion(actor.organizationId, actor.identityId, policyKey, body);
+    const enforcement = await authz.enforce({ actor, action: "POLICY_UPDATE", resource: { type: "POLICY", id: policyKey }, ip: req.ip });
+    const { policy, warnings } = await policyService.createVersion(actor.organizationId, actor.identityId, policyKey, body);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "POLICY_VERSION_CREATED", resourceType: "POLICY", resourceId: policy.id,
@@ -379,8 +387,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/api/policies/:id/activate", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    const enforcement = authz.enforce({ actor, action: "POLICY_ACTIVATE", resource: { type: "POLICY", id }, ip: req.ip });
-    const policy = policyService.activatePolicy(actor.organizationId, id);
+    const enforcement = await authz.enforce({ actor, action: "POLICY_ACTIVATE", resource: { type: "POLICY", id }, ip: req.ip });
+    const policy = await policyService.activatePolicy(actor.organizationId, id);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "POLICY_ACTIVATED", resourceType: "POLICY", resourceId: id,
@@ -392,8 +400,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/api/policies/:id/disable", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    const enforcement = authz.enforce({ actor, action: "POLICY_DISABLE", resource: { type: "POLICY", id }, ip: req.ip });
-    const policy = policyService.disablePolicy(actor.organizationId, id);
+    const enforcement = await authz.enforce({ actor, action: "POLICY_DISABLE", resource: { type: "POLICY", id }, ip: req.ip });
+    const policy = await policyService.disablePolicy(actor.organizationId, id);
     audit.record({
       organizationId: actor.organizationId, traceId: enforcement.traceId, actorId: actor.identityId,
       actorDid: actor.did, action: "POLICY_DISABLED", resourceType: "POLICY", resourceId: id, decision: "EXECUTED",
@@ -411,22 +419,22 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/api/authorize/simulate", async (req) => {
     const actor = requireActor(req);
     const body = validate(S.simulate, req.body);
-    authz.enforce({ actor, action: "PERMISSION_SIMULATE", resource: { type: "PERMISSION", query: true }, ip: req.ip });
+    await authz.enforce({ actor, action: "PERMISSION_SIMULATE", resource: { type: "PERMISSION", query: true }, ip: req.ip });
 
     let subject = actor;
     if (body.identityId && body.identityId !== actor.identityId) {
-      const built = identityService.buildActorContext(body.identityId, actor.organizationId);
+      const built = await identityService.buildActorContext(body.identityId, actor.organizationId);
       if (!built) throw notFound("Subject identity not found in this organization.");
       subject = built;
     } else if (body.agentId) {
-      const agent = one<any>(`SELECT identity_id FROM agents WHERE id = ? AND organization_id = ?`, body.agentId, actor.organizationId);
+      const agent = await one<any>(`SELECT identity_id FROM agents WHERE id = ? AND organization_id = ?`, body.agentId, actor.organizationId);
       if (!agent) throw notFound("Agent not found.");
-      const built = identityService.buildActorContext(agent.identity_id, actor.organizationId);
+      const built = await identityService.buildActorContext(agent.identity_id, actor.organizationId);
       if (!built) throw notFound("Agent identity could not be resolved.");
       subject = built;
     }
 
-    const result = authz.check({
+    const result = await authz.check({
       actor: subject, action: body.action,
       resource: { ...body.resource, organizationId: actor.organizationId },
       context: body.context,
@@ -444,25 +452,26 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/api/organization", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "ORG_READ", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
+    await authz.enforce({ actor, action: "ORG_READ", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
     return {
-      organization: orgService.getOrganization(actor.organizationId),
-      departments: orgService.listDepartments(actor.organizationId),
-      emergencyFlags: orgService.listEmergencyFlags(actor.organizationId),
+      organization: await orgService.getOrganization(actor.organizationId),
+      departments: await orgService.listDepartments(actor.organizationId),
+      emergencyFlags: await orgService.listEmergencyFlags(actor.organizationId),
     };
   });
 
   app.post("/api/organization/departments", async (req, reply) => {
     const actor = requireHuman(req);
     const body = validate(S.createDepartment, req.body);
-    authz.enforce({ actor, action: "ORG_MANAGE", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
-    return reply.code(201).send({ department: orgService.createDepartment(actor.organizationId, body.name, body.code.toUpperCase()) });
+    await authz.enforce({ actor, action: "ORG_MANAGE", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
+    return reply.code(201).send({ department: await orgService.createDepartment(actor.organizationId, body.name, body.code.toUpperCase()) });
   });
 
   app.get("/api/security/events", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "SECURITY", query: true }, ip: req.ip });
-    return { events: orgService.listSecurityEvents(actor.organizationId).map((e) => ({
+    await authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "SECURITY", query: true }, ip: req.ip });
+    const events = await orgService.listSecurityEvents(actor.organizationId);
+    return { events: events.map((e) => ({
       id: e.id, kind: e.kind, severity: e.severity, actorId: e.actor_id,
       summary: e.summary, detail: JSON.parse(e.detail_json || "{}"),
       acknowledgedAt: e.acknowledged_at, createdAt: e.created_at,
@@ -472,21 +481,21 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/api/security/events/:id/acknowledge", async (req) => {
     const actor = requireHuman(req);
     const { id } = req.params as { id: string };
-    authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "SECURITY", id }, ip: req.ip });
+    await authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "SECURITY", id }, ip: req.ip });
     orgService.acknowledgeSecurityEvent(actor.organizationId, id);
     return { ok: true };
   });
 
   app.get("/api/security/emergency", async (req) => {
     const actor = requireActor(req);
-    authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
+    await authz.enforce({ actor, action: "SECURITY_READ", resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip });
     return { flags: orgService.listEmergencyFlags(actor.organizationId) };
   });
 
   app.post("/api/security/emergency", async (req) => {
     const actor = requireHuman(req);
     const body = validate(S.emergencyFlag, req.body);
-    const enforcement = authz.enforce({
+    const enforcement = await authz.enforce({
       actor, action: "EMERGENCY_CONTROL",
       resource: { type: "ORGANIZATION", id: actor.organizationId }, ip: req.ip,
       payload: { flagKey: body.flagKey, enabled: body.enabled },
