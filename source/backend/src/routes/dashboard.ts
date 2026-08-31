@@ -159,4 +159,26 @@ export async function dashboardRoutes(app: FastifyInstance) {
       database: dbStatus,
     };
   });
+
+  app.get("/api/metrics", async (req) => {
+    const actor = requireActor(req);
+    const org = actor.organizationId;
+    const count = async (sql: string, ...params: unknown[]) => Number((await one<any>(sql, ...params))?.n ?? 0);
+  
+    const paymentsRequested = await count(`SELECT COUNT(*) n FROM payment_intents WHERE organization_id = ?`, org);
+    const executed = await count(`SELECT COUNT(*) n FROM payment_intents WHERE organization_id = ? AND state IN ('EXECUTED', 'RECONCILED')`, org);
+    const blocked = await count(`SELECT COUNT(*) n FROM payment_intents WHERE organization_id = ? AND state = 'DENIED'`, org);
+    const humanApprovals = await count(`SELECT COUNT(*) n FROM payment_intents WHERE organization_id = ? AND state = 'AWAITING_APPROVAL'`, org);
+    const executionFailures = await count(`SELECT COUNT(*) n FROM payment_intents WHERE organization_id = ? AND state = 'FAILED'`, org);
+    const blockRate = paymentsRequested > 0 ? blocked / paymentsRequested : 0;
+  
+    return {
+      paymentsRequested,
+      executed,
+      blocked,
+      humanApprovals,
+      executionFailures,
+      blockRate
+    };
+  });
 }

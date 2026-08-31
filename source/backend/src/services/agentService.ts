@@ -229,7 +229,7 @@ export async function toolCallHistory(agentId: string, limit = 100) {
   return await many<any>(`SELECT * FROM agent_tool_calls WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`, agentId, limit);
 }
 
-export async function toApi(row: any) {
+export function toApi(row: any) {
   return {
     id: row.id, name: row.name, did: row.did, status: row.status,
     identityId: row.identity_id, identityStatus: row.identity_status,

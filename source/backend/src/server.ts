@@ -5,7 +5,7 @@ import { env } from "./config/env.js";
 import { syncCapabilityCatalog } from "./services/orgService.js";
 
 async function main() {
-  await initDb(env.DATABASE_FILE);
+  await initDb(env.DATABASE_URL);
   await migrate();
   // The capability catalog lives in code and is mirrored into the database on boot, so
   // a deployment can never run with a stale or hand-edited capability list.

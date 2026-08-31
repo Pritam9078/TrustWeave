@@ -38,10 +38,10 @@ export class EvmBlockchainAdapter implements BlockchainAdapter {
     this.walletClient = createWalletClient({ account: this.account, chain, transport: http(cfg.rpcUrl) });
   }
 
-  /** Token ids are strings application-side; on-chain they are uint256. keccak of the
+  /** Token ids are strings application-side; on-chain they are bytes32. keccak of the
    *  string keeps that mapping deterministic and collision-resistant. */
-  private tokenIdToUint(tokenId: string): bigint {
-    return BigInt(keccak256(toHex(tokenId)));
+  private tokenIdToBytes32(tokenId: string): `0x${string}` {
+    return keccak256(toHex(tokenId));
   }
 
   private async write(address: string, abi: any, functionName: string, args: any[]): Promise<TxReceipt> {
@@ -68,22 +68,22 @@ export class EvmBlockchainAdapter implements BlockchainAdapter {
   }
 
   async mintAsset(p: { tokenId: string; ownerCommitment: string; metadataCommitment: string }) {
-    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "mintAsset",
-      [this.tokenIdToUint(p.tokenId), p.ownerCommitment, p.metadataCommitment]);
+    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "mint",
+      [this.tokenIdToBytes32(p.tokenId), p.ownerCommitment, p.metadataCommitment]);
   }
   async transferAsset(p: { tokenId: string; newOwnerCommitment: string }) {
-    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "transferAsset",
-      [this.tokenIdToUint(p.tokenId), p.newOwnerCommitment]);
+    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "transfer",
+      [this.tokenIdToBytes32(p.tokenId), p.newOwnerCommitment]);
   }
   async setAssetFrozen(tokenId: string, frozen: boolean) {
-    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "setFrozen", [this.tokenIdToUint(tokenId), frozen]);
+    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "setFrozen", [this.tokenIdToBytes32(tokenId), frozen]);
   }
   async revokeAsset(tokenId: string) {
-    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "revokeAsset", [this.tokenIdToUint(tokenId)]);
+    return this.write(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "revoke", [this.tokenIdToBytes32(tokenId)]);
   }
   async getAsset(tokenId: string): Promise<OnChainAsset> {
     try {
-      const r = await this.read(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "getAsset", [this.tokenIdToUint(tokenId)]);
+      const r = await this.read(this.addresses.assetRegistry!, ASSET_REGISTRY_ABI, "getAsset", [this.tokenIdToBytes32(tokenId)]);
       return { tokenId, ownerCommitment: r.ownerCommitment, metadataCommitment: r.metadataCommitment,
         frozen: Boolean(r.frozen), revoked: Boolean(r.revoked), exists: Boolean(r.exists) };
     } catch {

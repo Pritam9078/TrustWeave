@@ -83,6 +83,23 @@ export function computeEventHash(input: {
 }
 
 export async function record(input: AuditInput): Promise<AuditEventRow> {
+  let attempts = 0;
+  while (attempts < 10) {
+    try {
+      return await _record(input);
+    } catch (err: any) {
+      if (err.code === "23505" && err.constraint === "audit_events_organization_id_seq_key") {
+        attempts++;
+        await new Promise(r => setTimeout(r, Math.random() * 50));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Failed to append audit record due to high concurrency.");
+}
+
+async function _record(input: AuditInput): Promise<AuditEventRow> {
   const last = await one<{ seq: number; event_hash: string }>(
     `SELECT seq, event_hash FROM audit_events WHERE organization_id = ? ORDER BY seq DESC LIMIT 1`,
     input.organizationId,

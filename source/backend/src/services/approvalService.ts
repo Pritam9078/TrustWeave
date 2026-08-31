@@ -148,7 +148,7 @@ export async function decide(actor: ActorContext, approvalId: string, decision: 
   return { approval: getApproval(actor.organizationId, approvalId)!, alreadyDecided: false };
 }
 
-export async function toApi(row: any) {
+export function toApi(row: any) {
   return {
     id: row.id, requestType: row.request_type, requestId: row.request_id,
     requestedBy: row.requested_by, requesterName: row.requester_name ?? null, requesterDid: row.requester_did ?? null,

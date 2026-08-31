@@ -1,89 +1,127 @@
-/**
- * The single HTTP boundary.
- *
- * Every request goes through here so session handling, error shaping and the 401/403
- * distinction are decided in one place. Note what this file deliberately does NOT do:
- * it never attaches a role, capability or organization header. The server derives the
- * actor entirely from the session token — a client that could describe its own
- * privileges would be a client that could forge them.
- */
+import { getToken, logout } from "./session.js";
 
-const BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
-const TOKEN_KEY = "trustweave.session";
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:4001";
 
-export function getToken() {
-  try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; }
-}
-
-export function setToken(token) {
-  try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch { /* private browsing mode — the session simply won't persist a reload */ }
-}
-
-/**
- * A failed request carries the server's machine-readable code and, for authorization
- * denials, the full evaluation trace. The UI uses that trace to explain *why* an action
- * was refused rather than showing a bare "Forbidden" — the denial reason is one of the
- * most useful things this system produces, and discarding it would be a waste.
- */
-export class ApiError extends Error {
-  constructor(status, code, message, details) {
-    super(message || "Request failed.");
-    this.status = status;
-    this.code = code || "UNKNOWN";
-    this.details = details || null;
-    this.evaluation = details?.evaluation ?? null;
-    this.reasonCodes = details?.reasonCodes ?? [];
-    this.issues = details?.issues ?? null;
-  }
-  get isDenial() { return this.status === 403; }
-  get isAuthExpired() { return this.status === 401; }
-}
-
-async function request(method, path, body, opts = {}) {
-  const headers = { "content-type": "application/json" };
+async function request(path, options = {}) {
   const token = getToken();
-  if (token) headers.authorization = `Bearer ${token}`;
-
-  let response;
-  try {
-    response = await fetch(`${BASE}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(0, "NETWORK_ERROR", `Cannot reach the API at ${BASE}. Is the backend running?`);
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
+  
+  if (res.status === 401 && path !== "/api/auth/login") {
+    logout();
+    throw new Error("Session expired. Please log in again.");
   }
-
-  if (response.status === 204) return null;
-
-  const contentType = response.headers.get("content-type") ?? "";
-  const isJson = contentType.includes("application/json");
-  const payload = isJson ? await response.json().catch(() => ({})) : await response.text();
-
-  if (!response.ok) {
-    if (response.status === 401 && !opts.allowAnonymous) {
-      // The session is gone; stop pretending to be signed in.
-      setToken(null);
-    }
-    throw new ApiError(response.status, payload?.error, payload?.message, payload?.details);
+  
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error(body?.message ?? body?.error ?? `Request failed: ${res.status}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
-  return payload;
+  return body;
 }
 
+/**
+ * Thin client over the backend's API contract (see backend/src/routes/).
+ */
 export const api = {
-  get: (path) => request("GET", path),
-  post: (path, body) => request("POST", path, body),
-  patch: (path, body) => request("PATCH", path, body),
-  del: (path) => request("DELETE", path),
-  login: (email, password) => request("POST", "/api/auth/login", { email, password }, { allowAnonymous: true }),
-  challenge: (did) => request("POST", "/api/auth/challenge", { did }, { allowAnonymous: true }),
-  verify: (payload) => request("POST", "/api/auth/verify", payload, { allowAnonymous: true }),
-  authConfig: () => request("GET", "/api/auth/config", undefined, { allowAnonymous: true }),
-  session: () => request("GET", "/api/session"),
+  loginPassword: (email, password) => request("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  logout: () => request("/api/auth/logout", { method: "POST" }),
+  
+  listAgents: () => request("/api/agents").then(r => r.agents),
+  getAgent: (id) => request(`/api/agents/${id}`),
+  createAgent: (input) => request("/api/agents", { method: "POST", body: JSON.stringify(input) }),
+  getAgentOnChain: (id) => request(`/api/agents/${id}/on-chain`),
+  updateAgentStatus: (id, status) => request(`/api/agents/${id}/freeze`, { method: "POST", body: JSON.stringify({ status }) }),
+
+  listPaymentIntents: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/api/payment-intents${qs ? `?${qs}` : ""}`).then(r => r.intents);
+  },
+  createPaymentIntent: (input) => {
+    if (input.rawRequest) {
+      return request("/api/agents/task", {
+        method: "POST",
+        body: JSON.stringify({ instruction: input.rawRequest, execute: true })
+      }).then(r => {
+        if (r.toolCall?.data?.id) return { intentId: r.toolCall.data.id };
+        throw new Error(r.note ?? "The agent failed to create a payment intent.");
+      });
+    }
+    return request("/api/payment-intents", { method: "POST", body: JSON.stringify(input) });
+  },
+  getPaymentIntent: (id) => request(`/api/payment-intents/${id}`),
+  authorizePaymentIntent: (id) => request(`/api/payment-intents/${id}/authorize`, { method: "POST" }),
+  approvePaymentIntent: (id, input) => request(`/api/payment-intents/${id}/approve`, { method: "POST", body: JSON.stringify(input) }),
+  executePaymentIntent: (id) => request(`/api/payment-intents/${id}/execute`, { method: "POST" }),
+
+  listPolicies: () => request("/api/policies").then(r => r.policies.map(p => {
+    const rules = p.conditions?.rules || [];
+    return {
+      ...p,
+      status: p.status === "ACTIVE" ? "LIVE" : p.status === "DISABLED" ? "MONITORING" : p.status,
+      transactionLimit: rules.find(r => r.type === "AMOUNT_MAX")?.value || 0,
+      dailyLimit: rules.find(r => r.type === "VELOCITY")?.value || 0,
+      allowlist: rules.find(r => r.type === "MERCHANT_ALLOWLIST")?.values || [],
+      approvalThreshold: rules.find(r => r.type === "APPROVAL_THRESHOLD")?.value,
+    };
+  })),
+  getPolicy: (id) => request(`/api/policies/${id}`),
+  createPolicy: (input) => {
+    const rules = [
+      { type: "AMOUNT_MAX", value: input.transactionLimit },
+      { type: "VELOCITY", interval: "daily", value: input.dailyLimit },
+    ];
+    if (input.allowlist && input.allowlist.length > 0) rules.push({ type: "MERCHANT_ALLOWLIST", values: input.allowlist });
+    if (input.approvalThreshold) rules.push({ type: "APPROVAL_THRESHOLD", value: input.approvalThreshold });
+    
+    return request("/api/policies", { 
+      method: "POST", 
+      body: JSON.stringify({
+        policyKey: "pol_" + Math.random().toString(36).slice(2, 8),
+        name: input.name,
+        conditions: { rules }
+      }) 
+    }).then(r => {
+      return {
+        ...r.policy,
+        transactionLimit: input.transactionLimit,
+        dailyLimit: input.dailyLimit,
+        allowlist: input.allowlist || [],
+        approvalThreshold: input.approvalThreshold,
+        status: r.policy.status === "ACTIVE" ? "LIVE" : r.policy.status === "DISABLED" ? "MONITORING" : r.policy.status
+      };
+    });
+  },
+  updatePolicyStatus: (id, status) => {
+    const endpoint = status === "LIVE" ? "activate" : "disable";
+    return request(`/api/policies/${id}/${endpoint}`, { method: "POST" }).then(r => {
+      const p = r.policy;
+      const rules = p.conditions?.rules || [];
+      return {
+        ...p,
+        status: p.status === "ACTIVE" ? "LIVE" : p.status === "DISABLED" ? "MONITORING" : p.status,
+        transactionLimit: rules.find(r => r.type === "AMOUNT_MAX")?.value || 0,
+        dailyLimit: rules.find(r => r.type === "VELOCITY")?.value || 0,
+        allowlist: rules.find(r => r.type === "MERCHANT_ALLOWLIST")?.values || [],
+        approvalThreshold: rules.find(r => r.type === "APPROVAL_THRESHOLD")?.value,
+      };
+    });
+  },
+
+  listProofs: () => request("/api/proofs").then(r => r.proofs),
+  getProof: (id) => request(`/api/proofs/${id}`),
+  verifyProof: (id) => request(`/api/proofs/${id}/verify`, { method: "POST" }),
+
+  getMetrics: () => request("/api/metrics"),
+  health: () => request("/health"),
 };
 
-export const API_BASE = BASE;
+export class ApiError extends Error {}

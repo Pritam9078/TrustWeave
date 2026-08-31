@@ -9,11 +9,11 @@ export const IDENTITY_REGISTRY_ABI = [
 ] as const;
 
 export const ASSET_REGISTRY_ABI = [
-  { type: "function", name: "mintAsset", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }, { name: "ownerCommitment", type: "bytes32" }, { name: "metadataCommitment", type: "bytes32" }], outputs: [] },
-  { type: "function", name: "transferAsset", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }, { name: "newOwnerCommitment", type: "bytes32" }], outputs: [] },
-  { type: "function", name: "setFrozen", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }, { name: "frozen", type: "bool" }], outputs: [] },
-  { type: "function", name: "revokeAsset", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }], outputs: [] },
-  { type: "function", name: "getAsset", stateMutability: "view", inputs: [{ name: "tokenId", type: "uint256" }],
+  { type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "bytes32" }, { name: "ownerCommitment", type: "bytes32" }, { name: "metadataCommitment", type: "bytes32" }], outputs: [] },
+  { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "bytes32" }, { name: "newOwnerCommitment", type: "bytes32" }], outputs: [] },
+  { type: "function", name: "setFrozen", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "bytes32" }, { name: "frozen", type: "bool" }], outputs: [] },
+  { type: "function", name: "revoke", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "bytes32" }], outputs: [] },
+  { type: "function", name: "getAsset", stateMutability: "view", inputs: [{ name: "tokenId", type: "bytes32" }],
     outputs: [{ type: "tuple", components: [
       { name: "ownerCommitment", type: "bytes32" }, { name: "metadataCommitment", type: "bytes32" },
       { name: "frozen", type: "bool" }, { name: "revoked", type: "bool" }, { name: "exists", type: "bool" }] }] },

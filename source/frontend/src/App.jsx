@@ -1,86 +1,84 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { SessionProvider } from "./state/session.jsx";
-import { Shell, RequireSession, RequireCapability } from "./components/Shell.jsx";
-import Landing from "./pages/Landing.jsx";
-import Login from "./pages/Login.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
-import { ApprovalList, ApprovalDetail } from "./pages/workspace/Approvals.jsx";
-import { PaymentList, PaymentCreate, PaymentDetail } from "./pages/workspace/Payments.jsx";
-import { AssetList, AssetCreate, AssetDetail } from "./pages/workspace/Assets.jsx";
-import { AgentList, AgentCreate, AgentDetail } from "./pages/workspace/Agents.jsx";
-import Assistant from "./pages/workspace/Assistant.jsx";
-import Knowledge from "./pages/workspace/Knowledge.jsx";
-import { AuditTrail, Proofs } from "./pages/workspace/AuditTrail.jsx";
-import { IdentityList, IdentityCreate, IdentityDetail } from "./pages/admin/Identities.jsx";
-import { Roles } from "./pages/admin/Roles.jsx";
-import Scopes from "./pages/admin/Scopes.jsx";
-import { PolicyList, PolicyCreate, PolicyDetail } from "./pages/admin/Policies.jsx";
-import Simulator from "./pages/admin/Simulator.jsx";
-import { Security, Integrations } from "./pages/admin/Security.jsx";
+import React, { useEffect, useState } from "react";
+import HomePage from "./pages/HomePage.jsx";
+import LoginPage from "./pages/LoginPage.jsx";
+import Overview from "./pages/Overview.jsx";
+import PaymentRequest from "./pages/PaymentRequest.jsx";
+import Agents from "./pages/Agents.jsx";
+import Policies from "./pages/Policies.jsx";
+import BlockedRequest from "./pages/BlockedRequest.jsx";
+import ProofExplorer from "./pages/ProofExplorer.jsx";
+import AIAnalysis from "./pages/AIAnalysis.jsx";
+import Authorization from "./pages/Authorization.jsx";
+import HumanApproval from "./pages/HumanApproval.jsx";
+import RazorpayExecution from "./pages/RazorpayExecution.jsx";
+import AuditTimeline from "./pages/AuditTimeline.jsx";
+import AgentReputation from "./pages/AgentReputation.jsx";
+import { isLoggedIn } from "./lib/session.js";
 
-/**
- * Route tree.
- *
- * Every guarded route wears its required capability explicitly. This is presentation
- * routing — the same capability is enforced independently on the server for each
- * endpoint these pages call, so the guards here shape the experience without being
- * load-bearing for security.
- */
-export default function App() {
-  return (
-    <SessionProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
+// Public routes: no login required, no console shell.
+const PUBLIC_ROUTES = { "": HomePage, home: HomePage, login: LoginPage };
 
-          <Route path="/app" element={<RequireSession><Shell><Dashboard /></Shell></RequireSession>} />
+// Internal console routes — the PDF's "Buildathon Demo Route" (section 16):
+// Overview -> Create Request -> AI Evidence -> Authorization ->
+// Razorpay Test Execution -> Proof Explorer -> one blocked request.
+// Routes accept an optional trailing /:param (e.g. #/ai-analysis/<intentId>).
+const CONSOLE_ROUTES = {
+  overview: Overview,
+  "payment-request": PaymentRequest,
+  agents: Agents,
+  policies: Policies,
+  "blocked-requests": BlockedRequest,
+  "proof-explorer": ProofExplorer,
+  "ai-analysis": AIAnalysis,
+  authorization: Authorization,
+  "human-approval": HumanApproval,
+  "razorpay-execution": RazorpayExecution,
+  "audit-timeline": AuditTimeline,
+  "agent-reputation": AgentReputation,
+};
 
-          <Route path="/app/approvals" element={<Guard cap="PAYMENT_READ"><ApprovalList /></Guard>} />
-          <Route path="/app/approvals/:id" element={<Guard cap="PAYMENT_READ"><ApprovalDetail /></Guard>} />
-
-          <Route path="/app/payments" element={<Guard cap="PAYMENT_READ"><PaymentList /></Guard>} />
-          <Route path="/app/payments/new" element={<Guard cap="PAYMENT_CREATE"><PaymentCreate /></Guard>} />
-          <Route path="/app/payments/:id" element={<Guard cap="PAYMENT_READ"><PaymentDetail /></Guard>} />
-
-          <Route path="/app/assets" element={<Guard cap="ASSET_READ"><AssetList /></Guard>} />
-          <Route path="/app/assets/new" element={<Guard cap="ASSET_CREATE"><AssetCreate /></Guard>} />
-          <Route path="/app/assets/:id" element={<Guard cap="ASSET_READ"><AssetDetail /></Guard>} />
-
-          <Route path="/app/agents" element={<Guard cap="AGENT_READ"><AgentList /></Guard>} />
-          <Route path="/app/agents/new" element={<Guard cap="AGENT_REGISTER"><AgentCreate /></Guard>} />
-          <Route path="/app/agents/:id" element={<Guard cap="AGENT_READ"><AgentDetail /></Guard>} />
-
-          <Route path="/app/assistant" element={<Guard cap="AGENT_INVOKE"><Assistant /></Guard>} />
-          <Route path="/app/knowledge" element={<Guard cap="KNOWLEDGE_READ"><Knowledge /></Guard>} />
-          <Route path="/app/audit" element={<Guard cap="AUDIT_READ"><AuditTrail /></Guard>} />
-          <Route path="/app/proofs" element={<Guard cap="PROOF_VERIFY"><Proofs /></Guard>} />
-
-          <Route path="/app/admin/identities" element={<Guard cap="IDENTITY_READ"><IdentityList /></Guard>} />
-          <Route path="/app/admin/identities/new" element={<Guard cap="IDENTITY_CREATE"><IdentityCreate /></Guard>} />
-          <Route path="/app/admin/identities/:id" element={<Guard cap="IDENTITY_READ"><IdentityDetail /></Guard>} />
-          <Route path="/app/admin/roles" element={<Guard cap="ROLE_READ"><Roles /></Guard>} />
-          <Route path="/app/admin/scopes" element={<Guard cap="SCOPE_READ"><Scopes /></Guard>} />
-          <Route path="/app/admin/policies" element={<Guard cap="POLICY_READ"><PolicyList /></Guard>} />
-          <Route path="/app/admin/policies/new" element={<Guard cap="POLICY_CREATE"><PolicyCreate /></Guard>} />
-          <Route path="/app/admin/policies/:id" element={<Guard cap="POLICY_READ"><PolicyDetail /></Guard>} />
-          <Route path="/app/admin/simulator" element={<Guard cap="PERMISSION_SIMULATE"><Simulator /></Guard>} />
-          <Route path="/app/admin/security" element={<Guard cap="SECURITY_READ"><Security /></Guard>} />
-          <Route path="/app/admin/integrations" element={<Guard cap="INTEGRATION_READ"><Integrations /></Guard>} />
-
-          <Route path="/" element={<Landing />} />
-          <Route path="*" element={<Navigate to="/app" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </SessionProvider>
-  );
+function parseHash(hash) {
+  const clean = hash.replace(/^#\/?/, "");
+  const [route, param] = clean.split("/");
+  return { route: route ?? "", param: param ?? null };
 }
 
-function Guard({ cap, children }) {
-  return (
-    <RequireSession>
-      <Shell>
-        <RequireCapability capability={cap}>{children}</RequireCapability>
-      </Shell>
-    </RequireSession>
-  );
+function useHashRoute() {
+  const [state, setState] = useState(() => parseHash(window.location.hash));
+  useEffect(() => {
+    const onChange = () => setState(parseHash(window.location.hash));
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return state;
+}
+
+export default function App() {
+  const { route, param } = useHashRoute();
+
+  if (route in PUBLIC_ROUTES) {
+    const Page = PUBLIC_ROUTES[route];
+    return <Page param={param} />;
+  }
+
+  const Page = CONSOLE_ROUTES[route];
+  if (!Page) {
+    // Unknown route: send to the landing page rather than a blank screen.
+    window.location.hash = "#/";
+    return <HomePage />;
+  }
+
+  if (!isLoggedIn()) {
+    // Soft guard: this app has no real per-user auth to enforce server-side
+    // for the UI shell itself (see backend/src/config/auth.ts — auth is a
+    // single optional shared API key, checked on every actual API call
+    // regardless of this redirect). This just keeps the demo flow honest —
+    // arriving at a console screen without going through "demo access"
+    // first sends you there, matching the original UI doc's prescribed
+    // LOGIN -> DASHBOARD order.
+    window.location.hash = "#/login";
+    return <LoginPage />;
+  }
+
+  return <Page param={param} />;
 }

@@ -1,0 +1,23 @@
+<svg width="380" height="100" viewBox="0 0 380 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- badge -->
+  <rect x="6" y="6" width="88" height="88" rx="20" fill="#C4172C"/>
+
+  <!-- woven thread running behind the monogram -->
+  <line x1="18" y1="50" x2="82" y2="50"
+        stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="3"
+        stroke-linecap="round" stroke-dasharray="5 7"/>
+
+  <!-- "W" monogram -->
+  <polyline points="27,33 41,67 50,45 59,67 73,33"
+            fill="none" stroke="#FFFFFF" stroke-width="7"
+            stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="2"/>
+
+  <!-- wordmark -->
+  <text x="112" y="58" font-family="Georgia, 'Iowan Old Style', 'Times New Roman', serif" font-size="36" font-weight="700">
+    <tspan fill="#14151A">Trust</tspan><tspan fill="#C4172C">Weave</tspan>
+  </text>
+
+  <!-- tagline -->
+  <text x="114" y="76" font-family="ui-monospace, 'SFMono-Regular', 'IBM Plex Mono', monospace"
+        font-size="10" letter-spacing="2.5" fill="#9A9CA4">VERIFIABLE TRUST LAYER</text>
+</svg>

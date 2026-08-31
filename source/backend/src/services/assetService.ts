@@ -281,7 +281,7 @@ export async function createCollection(organizationId: string, name: string, des
   return await one<any>(`SELECT * FROM asset_collections WHERE id = ?`, id);
 }
 
-export async function toApi(row: any) {
+export function toApi(row: any) {
   return {
     id: row.id, name: row.name, assetType: row.asset_type,
     departmentId: row.department_id, departmentName: row.department_name ?? null,
