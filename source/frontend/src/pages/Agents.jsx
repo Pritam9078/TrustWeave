@@ -117,7 +117,7 @@ export default function Agents() {
             {agents.length === 0 && (
               <div className="px-5 py-6 text-[13px] text-[#B4B6BC] flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading agents…</div>
             )}
-            {agents.map((a) => {
+            {agents.map((a, i) => {
               const active = selected?.id === a.id;
               return (
                 <button
