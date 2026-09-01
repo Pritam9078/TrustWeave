@@ -52,7 +52,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
 
   app.addHook("onRequest", attachActor);
 
-  app.setErrorHandler((error, request, reply) => {
+  app.setErrorHandler((error: any, request, reply) => {
     if (error instanceof AppError) {
       // A DENY has already been written to the audit log by `enforce`. Returning the
       // reason code lets the UI explain *why* rather than showing a generic failure.
