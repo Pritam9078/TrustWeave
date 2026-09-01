@@ -90,8 +90,10 @@ export default function HomePage() {
   const loggedIn = isLoggedIn();
 
   useEffect(() => {
-    api.getMetrics().then(setMetrics).catch(() => setMetrics(null));
-  }, []);
+    if (loggedIn) {
+      api.getMetrics().then(setMetrics).catch(() => setMetrics(null));
+    }
+  }, [loggedIn]);
 
   const primaryHref = loggedIn ? "#/overview" : "#/login";
 
