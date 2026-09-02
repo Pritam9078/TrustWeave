@@ -23,7 +23,26 @@ export default function Authorization({ param: intentId }) {
   useEffect(() => {
     if (!intentId) return;
     let cancelled = false;
-    api.getPaymentIntent(intentId).then((d) => !cancelled && setData(d)).catch((err) => !cancelled && setError(err.message));
+
+    const fetchIntent = async () => {
+      try {
+        const d = await api.getPaymentIntent(intentId);
+        if (!cancelled) {
+          setData(d);
+          if (d?.authorization && d.authorization.decision !== "PENDING") {
+            // Done polling
+            return;
+          }
+          // Poll again
+          setTimeout(fetchIntent, 1500);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      }
+    };
+
+    fetchIntent();
+
     return () => { cancelled = true; };
   }, [intentId]);
 

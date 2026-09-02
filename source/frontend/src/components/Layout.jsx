@@ -155,12 +155,6 @@ export function Sidebar({ active = "overview", testMode = false, operator, role 
         )}
       </nav>
 
-      {testMode && (
-        <div className="mx-3 mb-3 flex items-center justify-between px-3 py-2 border border-[#BDE8CD] bg-[#EDF8F1] rounded-[3px]">
-          <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-[#296D44]">Live mode</span>
-          <span className="text-[10px] font-mono text-[#296D44]">RZP</span>
-        </div>
-      )}
 
       <div className="flex items-center justify-between px-4 py-3 border-t border-[#E7E6E2]">
         <div className="flex items-center gap-2 min-w-0">
