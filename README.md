@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="frontend/public/logo.png" width="120" alt="TrustWeave Logo"/>
+<img src="source/frontend/public/logo.svg" width="120" alt="TrustWeave Logo"/>
 
 # ⬡ TRUSTWEAVE
 
