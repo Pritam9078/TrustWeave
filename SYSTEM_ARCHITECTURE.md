@@ -11,26 +11,26 @@ This diagram shows the structural relationship between the protocol layers, incl
 ```mermaid
 graph TD
     subgraph FE["Sovereign Interface — Frontend"]
-        A[Dashboard & UI]
-        B[Agent Configuration]
-        C[Governance Hub]
-        D[Payment Requests]
-        E[Audit Timeline]
+        A["Dashboard & UI"]
+        B["Agent Configuration"]
+        C["Governance Hub"]
+        D["Payment Requests"]
+        E["Audit Timeline"]
     end
 
     subgraph BE["Orchestration Engine — Backend"]
-        F[Fastify API Server]
-        G[Policy & Authorization Engine]
-        H[Payment Service (Razorpay)]
-        I[Audit & Hash Engine]
-        J[(PostgreSQL / Supabase)]
+        F["Fastify API Server"]
+        G["Policy & Authorization Engine"]
+        H["Payment Service (Razorpay)"]
+        I["Audit & Hash Engine"]
+        J[("PostgreSQL / Supabase")]
     end
 
     subgraph CHAIN["Consensus Layer — EVM Blockchain"]
-        K[Identity Registry Contract]
-        L[Agent Registry Contract]
-        M[Asset Registry Contract]
-        N[Proof Registry Contract]
+        K["Identity Registry Contract"]
+        L["Agent Registry Contract"]
+        M["Asset Registry Contract"]
+        N["Proof Registry Contract"]
     end
 
     A -- "REST Calls" --> F
@@ -162,26 +162,26 @@ This diagram visualizes the interconnected nature of the TrustWeave ecosystem, i
 ```mermaid
 graph TD
     subgraph Client["Client Tier (Frontend)"]
-        UI[React / Vite UI]
-        API_LIB[API Integration Lib]
-        COMP[Tailwind / Lucide Components]
+        UI["React / Vite UI"]
+        API_LIB["API Integration Lib"]
+        COMP["Tailwind / Lucide Components"]
     end
 
     subgraph Logic["Orchestration Tier (Backend)"]
-        FAST[Fastify REST API]
-        AUTHZ[Authorization Engine]
-        PAY[Payment Service / Razorpay]
-        HASH[Cryptographic Audit Engine]
+        FAST["Fastify REST API"]
+        AUTHZ["Authorization Engine"]
+        PAY["Payment Service / Razorpay"]
+        HASH["Cryptographic Audit Engine"]
     end
 
     subgraph Data["Persistence & State"]
-        PG[(PostgreSQL)]
-        SUPA[Supabase Auth]
+        PG[("PostgreSQL")]
+        SUPA["Supabase Auth"]
     end
 
     subgraph Ledger["Settlement Tier (EVM Blockchain)"]
-        SC[Smart Contracts / Hardhat]
-        ETH[Ethers.js Adapters]
+        SC["Smart Contracts / Hardhat"]
+        ETH["Ethers.js Adapters"]
     end
 
     %% Dependencies
@@ -205,11 +205,11 @@ To maintain absolute transparency, the protocol records all state changes as an 
 
 ```mermaid
 graph LR
-    A[Action Triggered] --> B[Generate Payload Hash]
-    B --> C[Fetch Previous Event Hash]
-    C --> D[Compute sha256(Seq + Action + PrevHash + Payload)]
-    D --> E[Write Audit Event to Postgres]
-    E --> F[Periodically Submit to ProofRegistry On-Chain]
+    A["Action Triggered"] --> B["Generate Payload Hash"]
+    B --> C["Fetch Previous Event Hash"]
+    C --> D["Compute sha256(Seq + Action + PrevHash + Payload)"]
+    D --> E["Write Audit Event to Postgres"]
+    E --> F["Periodically Submit to ProofRegistry On-Chain"]
 ```
 
 > [!TIP]
