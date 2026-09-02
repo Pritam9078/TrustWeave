@@ -67,7 +67,7 @@ export const env = {
 
 /** Convenience projections used by the HTTP layer and the integration-status route. */
 export const CORS_ORIGINS = env.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
-export const DATABASE_URL = env.DATABASE_FILE;
+export const DATABASE_URL = env.DATABASE_URL;
 
 export function isProd() { return env.NODE_ENV === "production"; }
 
