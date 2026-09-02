@@ -45,10 +45,27 @@ export default function AIAnalysis({ param: intentId }) {
   useEffect(() => {
     if (!intentId) return;
     let cancelled = false;
+    
     api
-      .getPaymentIntent(intentId)
-      .then((d) => !cancelled && setData(d))
-      .catch((err) => !cancelled && setError(err.message));
+      .authorizePaymentIntent(intentId)
+      .then((authResult) => {
+        if (cancelled) return;
+        return api.getPaymentIntent(intentId).then((fullIntentData) => {
+          if (cancelled) return;
+          setData({
+            ...fullIntentData,
+            authorization: {
+              decision: authResult.decision,
+              reasonCodes: authResult.reasonCodes,
+              evaluation: authResult.evaluation
+            }
+          });
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+      
     return () => { cancelled = true; };
   }, [intentId]);
 

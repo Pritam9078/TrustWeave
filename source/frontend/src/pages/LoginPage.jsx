@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { login } from "../lib/session.js";
 import { api } from "../lib/api.js";
-import { ShieldCheck, ArrowRight, Loader2, Mail, Lock } from "lucide-react";
+import { ShieldCheck, ArrowRight, Loader2, Mail, Lock, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState(null);
 
@@ -85,13 +86,20 @@ export default function LoginPage() {
                 <Lock size={16} className="text-slate-400" />
               </div>
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••••••"
-                className="w-full border border-slate-200 rounded-lg pl-10 pr-4 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-red-600 focus:ring-2 focus:ring-red-600/20 transition-all"
+                className="w-full border border-slate-200 rounded-lg pl-10 pr-10 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-red-600 focus:ring-2 focus:ring-red-600/20 transition-all"
                 disabled={checking}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
             </div>
           </div>
 

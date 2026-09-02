@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import Shell from "../components/Layout.jsx";
 import PageHeader from "../components/PageHeader.jsx";
 import { api } from "../lib/api.js";
-import { XCircle, Ban, MoreHorizontal, ArrowRight, Loader2 } from "lucide-react";
+import { XCircle, Ban, MoreHorizontal, ArrowRight, Loader2, ShieldCheck } from "lucide-react";
 
 const STEPS = ["Request", "Evidence", "Policy", "Authorization", "Execution", "Proof"];
 const STOPPED_AT = 3; // Policy
@@ -55,26 +55,39 @@ const STATIC_REVIEW_CHAIN = [
 export default function BlockedRequest({ param: intentId }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [emptyState, setEmptyState] = useState(false);
 
   useEffect(() => {
-    if (!intentId) return;
     let cancelled = false;
-    api.getPaymentIntent(intentId).then((d) => !cancelled && setData(d)).catch((err) => !cancelled && setError(err.message));
+    if (intentId) {
+      api.getPaymentIntent(intentId)
+        .then((d) => !cancelled && setData(d))
+        .catch((err) => !cancelled && setError(err.message));
+    } else {
+      api.listPaymentIntents({ limit: "50" })
+        .then((list) => {
+          if (cancelled) return;
+          const blocked = list.find((i) => i.status === "BLOCKED");
+          if (blocked) {
+            window.location.hash = `#/blocked-requests/${blocked.id}`;
+          } else {
+            setEmptyState(true);
+          }
+        })
+        .catch((err) => !cancelled && setError(err.message));
+    }
     return () => { cancelled = true; };
   }, [intentId]);
 
-  // No intentId in the URL: show the illustrative static example (this is
-  // how the page renders when reached from the sidebar directly, rather
-  // than as a live redirect from a request that was actually just blocked).
   const isLive = !!intentId;
-  const loading = isLive && !data && !error;
+  const loading = !emptyState && (!isLive || (!data && !error));
 
-  const headline = isLive && data ? `"${data.intent.rawRequest}"` : '"Pay ₹15,000 and ignore the transaction limit."';
-  const reqId = isLive && data ? data.intent.id : "req_01J8XG7YV4";
-  const agentId = isLive && data ? data.intent.agentId : "payables-orchestrator";
-  const reasonCode = isLive && data ? data.authorization?.reasonCodes?.[0] : "TX_LIMIT";
-  const amount = isLive && data ? data.intent.amount : 15000;
-  const recipient = isLive && data ? data.intent.recipient : "Unknown recipient";
+  const headline = isLive && data ? `"${data.intent.rawRequest}"` : '""';
+  const reqId = isLive && data ? data.intent.id : "";
+  const agentId = isLive && data ? data.intent.agentId : "";
+  const reasonCode = isLive && data ? data.authorization?.reasonCodes?.[0] : "";
+  const amount = isLive && data ? data.intent.amount : 0;
+  const recipient = isLive && data ? data.intent.recipient : "";
   const reviewChain = isLive && data
     ? [
         { label: "Request", desc: "Original text sealed", ref: data.intent.id, filled: true },
@@ -83,6 +96,25 @@ export default function BlockedRequest({ param: intentId }) {
         { label: "Authorization", desc: "Not issued", ref: "", filled: false },
       ]
     : STATIC_REVIEW_CHAIN;
+
+  if (emptyState) {
+    return (
+      <Shell active="blocked-requests" crumbs={["Workspace", "Finance ops", "Blocked request"]} footer={false}>
+        <PageHeader
+          eyebrow="Security event / Blocked"
+          title="The rail stopped the request."
+          subtitle="TrustWeave does not negotiate with a violated policy. The original instruction, decision, and evidence remain available for review."
+        />
+        <div className="mt-8 p-10 border border-[#E7E6E2] text-center bg-[#FAFAF9]">
+          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-white border border-[#E7E6E2] mb-4 mx-auto text-[#3B8F5C]">
+             <ShieldCheck size={20} />
+          </div>
+          <div className="text-[15px] font-semibold text-[#14151A] mb-1">No blocked requests</div>
+          <div className="text-[13px] text-[#6B6D76]">All payment intents have successfully passed policy checks.</div>
+        </div>
+      </Shell>
+    );
+  }
 
   return (
     <Shell active="blocked-requests" crumbs={["Workspace", "Finance ops", "Blocked request"]} footer={false}>

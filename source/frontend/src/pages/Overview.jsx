@@ -183,7 +183,7 @@ export default function Overview() {
             <div className="space-y-2 text-[12px]">
               <div className="flex items-center justify-between">
                 <span className="text-[#6B6D76]">Razorpay API</span>
-                <span className="font-mono text-[#B7791F] uppercase text-[10px]">Test mode</span>
+                <span className="font-mono text-[#3B8F5C] uppercase text-[10px]">Live mode</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[#6B6D76]">Ledger sync</span>

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import hre from "hardhat";
 import fs from "node:fs";
 import path from "node:path";

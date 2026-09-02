@@ -42,7 +42,22 @@ export default function PaymentRequest() {
   const [agents, setAgents] = useState([]);
   const [agentId, setAgentId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingBlocked, setLoadingBlocked] = useState(false);
   const [error, setError] = useState(null);
+
+  const amountMatch = intent.match(/\d+([,.]\d+)?/);
+  const amount = amountMatch ? parseFloat(amountMatch[0].replace(/,/g, "")) : null;
+  const recipientMatch = intent.match(/to\s+([A-Za-z0-9\s]+?)(?=\s+(for|and|in|\.|$))/i);
+  const recipient = recipientMatch ? recipientMatch[1].trim() : "Unknown";
+
+  const previewJson = {
+    action: "payment.create",
+    amount: amount || null,
+    currency: "INR",
+    recipient: recipient,
+    reference: "Pending extraction",
+    mode: "test"
+  };
 
   useEffect(() => {
     api
@@ -52,22 +67,57 @@ export default function PaymentRequest() {
         const preferred = list.find((a) => a.name === "payables-orchestrator") ?? list[0];
         if (preferred) setAgentId(preferred.id);
       })
-      .catch(() => {
-        // Backend not reachable — the form still renders read-only so the
-        // UI can be reviewed without a running backend.
+      .catch((err) => {
+        setError("Failed to load agents: " + (err.message || String(err)));
       });
   }, []);
 
   async function handleAnalyze() {
-    if (!agentId || !intent.trim()) return;
+    let targetAgentId = agentId;
+    if (!targetAgentId) {
+      const list = await api.listAgents().catch(() => []);
+      const preferred = list.find((a) => a.name === "payables-orchestrator") ?? list[0];
+      if (preferred) targetAgentId = preferred.id;
+    }
+    
+    if (!targetAgentId || !intent.trim()) {
+      setError("No agent available to process request.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const result = await api.createPaymentIntent({ agentId, rawRequest: intent.trim() });
+      const result = await api.createPaymentIntent({ agentId: targetAgentId, rawRequest: intent.trim() });
       window.location.hash = `#/ai-analysis/${result.intentId}`;
     } catch (err) {
       setError(err.message ?? "Request failed.");
       setLoading(false);
+    }
+  }
+
+  async function handleBlockedPath() {
+    let targetAgentId = agentId;
+    if (!targetAgentId) {
+      const list = await api.listAgents().catch(() => []);
+      const preferred = list.find((a) => a.name === "payables-orchestrator") ?? list[0];
+      if (preferred) targetAgentId = preferred.id;
+    }
+    
+    if (!targetAgentId) {
+      setError("No agent available to process request.");
+      return;
+    }
+
+    setLoadingBlocked(true);
+    setError(null);
+    try {
+      // Intentionally violating the 500k transaction limit to trigger policy block
+      const result = await api.createPaymentIntent({ agentId: targetAgentId, rawRequest: "Pay ₹6,000,000 to personal account" });
+      window.location.hash = `#/ai-analysis/${result.intentId}`;
+    } catch (err) {
+      setError(err.message ?? "Request failed.");
+      setLoadingBlocked(false);
     }
   }
 
@@ -129,17 +179,23 @@ export default function PaymentRequest() {
                 {error}
               </div>
             )}
+            <div className="text-[10px] text-red-500 mb-2">DEBUG: agents.length = {agents.length}, agentId = {agentId || 'empty'}</div>
             <div className="flex items-center gap-3">
               <button
                 onClick={handleAnalyze}
-                disabled={loading || !agentId}
+                disabled={loading || loadingBlocked}
                 className="flex items-center gap-1.5 bg-[#C4172C] text-white text-[11px] font-mono uppercase tracking-[0.08em] px-4 py-2.5 hover:bg-[#A81225] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? <Loader2 size={13} className="animate-spin" /> : null}
                 {loading ? "Analyzing…" : "Run evidence analysis"} {!loading && <ArrowRight size={13} />}
               </button>
-              <button className="flex items-center gap-1.5 border border-[#E7E6E2] text-[#B4B6BC] text-[11px] font-mono uppercase tracking-[0.08em] px-4 py-2.5 cursor-not-allowed">
-                <Ban size={13} /> Preview blocked path
+              <button 
+                onClick={handleBlockedPath}
+                disabled={loading || loadingBlocked}
+                className="flex items-center gap-1.5 border border-[#E7E6E2] text-[#B4B6BC] text-[11px] font-mono uppercase tracking-[0.08em] px-4 py-2.5 hover:bg-[#F6F6F4] hover:text-[#14151A] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingBlocked ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}
+                {loadingBlocked ? "Previewing…" : "Preview blocked path"}
               </button>
             </div>
           </div>
@@ -156,17 +212,10 @@ export default function PaymentRequest() {
           </div>
           <div className="p-5">
             <pre className="bg-[#F6F6F4] border border-[#EDECE8] p-4 text-[12.5px] font-mono text-[#14151A] leading-[1.7] overflow-x-auto">
-{`{
-  "action": "payment.create",
-  "amount": 4500,
-  "currency": "INR",
-  "recipient": "ABC Technologies",
-  "reference": "INV-1024",
-  "mode": "test"
-}`}
+{JSON.stringify(previewJson, null, 2)}
             </pre>
             <p className="mt-4 text-[12px] leading-[1.6] text-[#6B6D76]">
-              This is an illustrative preview. TrustWeave's LLM extracts the actual structured
+              This is a live preview. TrustWeave's LLM will extract the actual structured
               intent from your request on the next screen, grounded in retrieved evidence.
             </p>
           </div>

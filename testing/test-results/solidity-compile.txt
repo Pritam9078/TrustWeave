@@ -1,6 +1,0 @@
-Compiled with solc 0.8.24+commit.e11b9ed9.Emscripten.clang
-Errors: 0   Warnings: 0
-  AgentRegistry          3418 bytes
-  AssetRegistry          3733 bytes
-  IdentityRegistry       3008 bytes
-  ProofRegistry          2126 bytes

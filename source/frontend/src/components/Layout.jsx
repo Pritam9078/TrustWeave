@@ -14,6 +14,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { getIdentity, logout, getWorkspace } from "../lib/session.js";
+import { api } from "../lib/api.js";
 
 /**
  * TrustWeave — shared design tokens
@@ -44,16 +45,16 @@ export const NAV_OPERATIONS = [
   { key: "overview", label: "Overview", icon: Activity, href: "#/overview", workspaces: ["admin", "manager", "auditor", "user"] },
   { key: "payment-request", label: "Payment request", icon: Plus, href: "#/payment-request", workspaces: ["admin", "manager", "user"] },
   { key: "proof-explorer", label: "Proof explorer", icon: Fingerprint, href: "#/proof-explorer", workspaces: ["admin", "manager", "auditor"] },
-  { key: "blocked-requests", label: "Blocked requests", icon: Ban, href: "#/blocked-requests", badge: 37, workspaces: ["admin", "manager"] },
+  { key: "blocked-requests", label: "Blocked requests", icon: Ban, href: "#/blocked-requests", countKey: "blocked", workspaces: ["admin", "manager"] },
 ];
 
 export const NAV_SYSTEM = [
-  { key: "agents", label: "Agents", icon: Boxes, href: "#/agents", badge: 12, workspaces: ["admin", "manager"] },
+  { key: "agents", label: "Agents", icon: Boxes, href: "#/agents", countKey: "agents", workspaces: ["admin", "manager"] },
   { key: "agent-reputation", label: "Reputation", icon: TrendingUp, href: "#/agent-reputation", workspaces: ["admin"] },
   { key: "policies", label: "Policies", icon: SlidersHorizontal, href: "#/policies", workspaces: ["admin", "manager"] },
 ];
 
-function NavRow({ item, active }) {
+function NavRow({ item, active, count }) {
   const Icon = item.icon;
   return (
     <a
@@ -69,14 +70,14 @@ function NavRow({ item, active }) {
         <Icon size={15} strokeWidth={1.75} className={active ? "text-[#C4172C]" : "text-[#8A8C94]"} />
         <span className="text-[13px] font-medium tracking-[-0.01em]">{item.label}</span>
       </span>
-      {item.badge ? (
+      {count !== undefined ? (
         <span
           className={[
             "font-mono text-[11px] tabular-nums",
             active ? "text-[#C4172C]" : "text-[#9A9CA4]",
           ].join(" ")}
         >
-          {item.badge}
+          {count}
         </span>
       ) : null}
     </a>
@@ -94,6 +95,18 @@ export function Sidebar({ active = "overview", testMode = false, operator, role 
         .slice(0, 2)
         .map((s) => s[0]?.toUpperCase())
         .join("") || "DO";
+
+  const [counts, setCounts] = React.useState({ agents: 0, blocked: 0 });
+
+  React.useEffect(() => {
+    Promise.allSettled([api.listAgents(), api.listPaymentIntents({ limit: "100" })]).then(([aRes, iRes]) => {
+      let agentsCount = counts.agents;
+      let blockedCount = counts.blocked;
+      if (aRes.status === "fulfilled") agentsCount = aRes.value.length;
+      if (iRes.status === "fulfilled") blockedCount = aRes.value.filter(i => i.status === "BLOCKED").length;
+      setCounts({ agents: agentsCount, blocked: blockedCount });
+    });
+  }, []);
 
   let currentWorkspace = getWorkspace();
   if (getIdentity()?.email === "opsmgr@northwind.test") {
@@ -124,7 +137,7 @@ export function Sidebar({ active = "overview", testMode = false, operator, role 
             <div className="px-5 mb-2 text-[10px] font-mono uppercase tracking-[0.14em] text-[#B4B6BC]">Operations</div>
             <div className="space-y-0.5 mb-6">
               {visibleOperations.map((item) => (
-                <NavRow key={item.key} item={item} active={active === item.key} />
+                <NavRow key={item.key} item={item} active={active === item.key} count={item.countKey ? counts[item.countKey] : undefined} />
               ))}
             </div>
           </>
@@ -135,7 +148,7 @@ export function Sidebar({ active = "overview", testMode = false, operator, role 
             <div className="px-5 mb-2 text-[10px] font-mono uppercase tracking-[0.14em] text-[#B4B6BC]">System</div>
             <div className="space-y-0.5">
               {visibleSystem.map((item) => (
-                <NavRow key={item.key} item={item} active={active === item.key} />
+                <NavRow key={item.key} item={item} active={active === item.key} count={item.countKey ? counts[item.countKey] : undefined} />
               ))}
             </div>
           </>
@@ -143,9 +156,9 @@ export function Sidebar({ active = "overview", testMode = false, operator, role 
       </nav>
 
       {testMode && (
-        <div className="mx-3 mb-3 flex items-center justify-between px-3 py-2 border border-[#F0DFAE] bg-[#FBF3E3] rounded-[3px]">
-          <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-[#8A6415]">Test mode</span>
-          <span className="text-[10px] font-mono text-[#8A6415]">RZP</span>
+        <div className="mx-3 mb-3 flex items-center justify-between px-3 py-2 border border-[#BDE8CD] bg-[#EDF8F1] rounded-[3px]">
+          <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-[#296D44]">Live mode</span>
+          <span className="text-[10px] font-mono text-[#296D44]">RZP</span>
         </div>
       )}
 

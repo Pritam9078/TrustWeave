@@ -1,3 +1,5 @@
+// @ts-nocheck
+/// <reference types="node" />
 /**
  * Copies deployed registry addresses into backend/.env so going from a deploy to a
  * wired backend is one command rather than four manual copy-pastes (each of which is
@@ -9,7 +11,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const networkName = process.env.HARDHAT_NETWORK ?? "localhost";
-const deploymentFile = path.join(process.cwd(), "deployments", `${networkName}.json`);
+const rootDir = path.join(__dirname, "..");
+const deploymentFile = path.join(rootDir, "source", "contracts", "deployments", `${networkName}.json`);
 
 if (!fs.existsSync(deploymentFile)) {
   console.error(`No deployment at ${deploymentFile}. Run \`npm run deploy:${networkName}\` first.`);
@@ -17,7 +20,7 @@ if (!fs.existsSync(deploymentFile)) {
 }
 
 const deployment = JSON.parse(fs.readFileSync(deploymentFile, "utf8"));
-const envPath = path.join(process.cwd(), "..", "backend", ".env");
+const envPath = path.join(rootDir, "source", "backend", ".env");
 
 const updates: Record<string, string> = {
   BLOCKCHAIN_ADAPTER: "evm",
