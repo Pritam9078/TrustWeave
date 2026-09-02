@@ -38,21 +38,21 @@ async function ingestPolicyDoc(sourcePolicyKey: string | null, title: string) {
 describe("Freshness is only claimed where it can be established", () => {
   it("treats a document with no governing policy as neither fresh nor stale", async () => {
     const id = await ingestPolicyDoc(null, "Unlinked note");
-    const result = ragService.evidenceFreshness(h.orgId, [id]);
+    const result = await ragService.evidenceFreshness(h.orgId, [id]);
     // Not counted at all: a document that never claimed to restate a policy cannot go
     // stale against one, and pretending otherwise would make the signal meaningless.
     expect(result.checked).toBe(0);
     expect(result.fresh).toBe(true);
   });
 
-  it("reports an empty evidence set as fresh without inventing a check", () => {
-    const result = ragService.evidenceFreshness(h.orgId, []);
+  it("reports an empty evidence set as fresh without inventing a check", async () => {
+    const result = await ragService.evidenceFreshness(h.orgId, []);
     expect(result).toEqual({ fresh: true, checked: 0, stale: [] });
   });
 
   it("considers a document fresh while its policy version is unchanged", async () => {
     const id = await ingestPolicyDoc("payment-limits", "Procurement rules v1");
-    const result = ragService.evidenceFreshness(h.orgId, [id]);
+    const result = await ragService.evidenceFreshness(h.orgId, [id]);
     expect(result.checked).toBe(1);
     expect(result.fresh).toBe(true);
     expect(result.stale).toEqual([]);
@@ -64,7 +64,7 @@ describe("Re-versioning a policy makes its documents stale", () => {
 
   it("detects the divergence and explains it", async () => {
     docId = await ingestPolicyDoc("payment-limits", "Procurement rules pinned to v1");
-    expect(ragService.evidenceFreshness(h.orgId, [docId]).fresh).toBe(true);
+    expect((await ragService.evidenceFreshness(h.orgId, [docId])).fresh).toBe(true);
 
     // Author a new version of the governing policy and activate it.
     const bumped = await asUser(h, "admin")("POST", "/api/policies/payment-limits/versions", {
@@ -76,7 +76,7 @@ describe("Re-versioning a policy makes its documents stale", () => {
     });
     expect(bumped.statusCode).toBe(201);
 
-    const result = ragService.evidenceFreshness(h.orgId, [docId]);
+    const result = await ragService.evidenceFreshness(h.orgId, [docId]);
     expect(result.fresh).toBe(false);
     expect(result.stale).toHaveLength(1);
     expect(result.stale[0].policyKey).toBe("payment-limits");
@@ -87,16 +87,16 @@ describe("Re-versioning a policy makes its documents stale", () => {
   it("fails closed on an indeterminate answer rather than defaulting to fresh", async () => {
     // A policy with no ACTIVE version cannot confirm the document's rules are in force.
     const orphan = await ingestPolicyDoc("no-such-policy", "Doc citing a policy that does not exist");
-    const result = ragService.evidenceFreshness(h.orgId, [orphan]);
+    const result = await ragService.evidenceFreshness(h.orgId, [orphan]);
     expect(result.fresh).toBe(false);
     expect(result.stale[0].currentHash).toBeNull();
     expect(result.stale[0].reason).toMatch(/no active version/i);
   });
 
-  it("does not leak staleness across tenants", () => {
+  it("does not leak staleness across tenants", async () => {
     // A document id from another organization is simply not found, so it contributes
     // nothing — the scan is tenant-scoped like every other read.
-    const result = ragService.evidenceFreshness(h.orgId, ["doc_from_another_tenant"]);
+    const result = await ragService.evidenceFreshness(h.orgId, ["doc_from_another_tenant"]);
     expect(result.checked).toBe(0);
     expect(result.fresh).toBe(true);
   });
@@ -154,7 +154,7 @@ describe("The orchestrator refuses to act on stale evidence", () => {
 describe("Re-ingesting the document restores freshness", () => {
   it("captures the current policy hash and clears the block", async () => {
     const id = await ingestPolicyDoc("payment-limits", "Procurement rules, re-issued");
-    const result = ragService.evidenceFreshness(h.orgId, [id]);
+    const result = await ragService.evidenceFreshness(h.orgId, [id]);
     expect(result.fresh).toBe(true);
   });
 });
@@ -198,25 +198,26 @@ describe("isEvidenceFresh — boolean projection over retrieved chunks", () => {
 
   it("agrees with evidenceFreshness on live data", async () => {
     const docId = await ingestPolicyDoc("payment-limits", "Agreement check");
-    const live = ragService.currentPolicyHash(h.orgId, "payment-limits");
+    const live = await ragService.currentPolicyHash(h.orgId, "payment-limits");
     expect(live).toBeTruthy();
 
-    const retrieved = ragService.retrieveForActor(
-      { ...(await import("../src/services/identityService.js")).buildActorContext(h.ids.admin, h.orgId)! },
+    const retrieved = await ragService.retrieveForActor(
+      { ...await (await import("../src/services/identityService.js")).buildActorContext(h.ids.admin, h.orgId)! },
       "payments approved vendor", 10,
     );
     const ours = retrieved.chunks.filter((c) => c.documentId === docId);
     expect(ours.length).toBeGreaterThan(0);
     expect(ragService.isEvidenceFresh(ours, live!)).toBe(true);
-    expect(ragService.evidenceFreshness(h.orgId, [docId]).fresh).toBe(true);
+    expect((await ragService.evidenceFreshness(h.orgId, [docId])).fresh).toBe(true);
   });
 
   it("carries the policy hash on every retrieved chunk", async () => {
     const docId = await ingestPolicyDoc("payment-limits", "Hash carrier");
-    const chunks = ragService.retrieveForActor(
-      (await import("../src/services/identityService.js")).buildActorContext(h.ids.admin, h.orgId)!,
+    const retrieved = await ragService.retrieveForActor(
+      await (await import("../src/services/identityService.js")).buildActorContext(h.ids.admin, h.orgId)!,
       "payments approved vendor", 10,
-    ).chunks.filter((c) => c.documentId === docId);
+    );
+    const chunks = retrieved.chunks.filter((c) => c.documentId === docId);
     expect(chunks[0].policyKey).toBe("payment-limits");
     expect(chunks[0].policyHash).toBeTruthy();
   });

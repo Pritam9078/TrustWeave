@@ -1,4 +1,4 @@
-import { run, j, one } from "../db/clientV2.js";
+import { run, j, one } from "../db/client.js";
 import { newId, newTraceId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { getTool } from "./toolRegistry.js";

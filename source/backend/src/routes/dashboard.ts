@@ -3,7 +3,7 @@ import { requireActor } from "../auth/middleware.js";
 import * as authz from "../services/authorizationService.js";
 import * as audit from "../services/auditService.js";
 import * as orgService from "../services/orgService.js";
-import { one, many } from "../db/clientV2.js";
+import { one, many } from "../db/client.js";
 import { getBlockchainAdapter } from "../adapters/blockchain/index.js";
 import { getRazorpayAdapter } from "../adapters/razorpay/index.js";
 import { getLLMProvider } from "../adapters/llm/index.js";

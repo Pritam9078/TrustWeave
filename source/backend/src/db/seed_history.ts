@@ -1,4 +1,4 @@
-import { initDb, run, one } from "./clientV2.js";
+import { initDb, run, one } from "./client.js";
 import { env } from "../config/env.js";
 import { newId, newTraceId } from "../core/ids.js";
 
@@ -40,16 +40,16 @@ async function seedHistory() {
   }
   const orgId = org.id;
 
-  const actor = await one<any>(`SELECT id, did FROM identities WHERE email = 'manager@northwind.test'`);
+  const actor = await one<any>(`SELECT id, did FROM identities WHERE organization_id = ? AND email = ?`, orgId, 'manager@northwind.test');
   if (!actor) {
     console.error("Actor not found.");
     process.exit(1);
   }
 
-  const agent = await one<any>(`SELECT id FROM agents WHERE name = 'FinanceAgent-01'`);
+  const agent = await one<any>(`SELECT id FROM agents WHERE organization_id = ? AND name = ?`, orgId, 'FinanceAgent-01');
   const agentId = agent ? agent.id : null;
 
-  const policy = await one<any>(`SELECT id, version FROM policies WHERE policy_key = 'vendor-controls' LIMIT 1`);
+  const policy = await one<any>(`SELECT id, version FROM policies WHERE organization_id = ? AND policy_key = ? LIMIT 1`, orgId, 'vendor-controls');
 
   console.log("Generating 50 historical payment intents...");
 

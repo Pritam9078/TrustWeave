@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/clientV2.js";
+import { one, many, run, tx, j } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { computePolicyHash } from "../core/hash.js";

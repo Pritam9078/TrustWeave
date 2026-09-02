@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/clientV2.js";
+import { one, many, run, tx, j } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { badRequest, conflict, forbidden, notFound } from "../core/errors.js";
@@ -125,7 +125,7 @@ export async function decide(actor: ActorContext, approvalId: string, decision: 
 
   if (changed === 0) {
     // Another approver won the race between our read and our write.
-    return { approval: getApproval(actor.organizationId, approvalId)!, alreadyDecided: true };
+    return { approval: await getApproval(actor.organizationId, approvalId)!, alreadyDecided: true };
   }
 
   audit.record({
@@ -145,7 +145,7 @@ export async function decide(actor: ActorContext, approvalId: string, decision: 
     payload: { note, requiredCapability: approval.required_capability, requestedBy: approval.requested_by },
   });
 
-  return { approval: getApproval(actor.organizationId, approvalId)!, alreadyDecided: false };
+  return { approval: await getApproval(actor.organizationId, approvalId)!, alreadyDecided: false };
 }
 
 export function toApi(row: any) {

@@ -1,4 +1,4 @@
-import { initDb, run, one, j } from "./clientV2.js";
+import { initDb, run, one, j } from "./client.js";
 import { migrate } from "./migrate.js";
 import { env } from "../config/env.js";
 import { newId, newTraceId } from "../core/ids.js";

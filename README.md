@@ -1,15 +1,16 @@
 <div align="center">
 
-<img width="180" alt="trustweave-icon" src="https://github.com/user-attachments/assets/ea4c7b0e-0ad6-4a14-bb57-07ee128a32d9" />
+<img src="frontend/public/logo.png" width="120" alt="TrustWeave Logo"/>
 
 # ⬡ TRUSTWEAVE
 
-### *Verifiable identity, authorization, digital assets and governed AI actions.*
+### *Sovereign Infrastructure for Trustless Cross-Chain Automation*
 
-> Authenticate the identity. Authorize the action. Verify the asset. Prove everything.
+> Cryptographic certainty. Zero trust. Infinite interoperability.
 
 [![Live Demo](https://img.shields.io/badge/🌐_Live_Demo-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://trustweave.vercel.app/)
-[![Backend API](https://img.shields.io/badge/⚡_Backend_API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://trustweave-backend.onrender.com)
+[![Backend API](https://img.shields.io/badge/⚡_Backend_API-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://trustweave-backend.onrender.com/)
+[![Demo Video](https://img.shields.io/badge/🎬_Full_Walkthrough-Google_Drive-4285F4?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1vFOfGjbB2ehYbs4v8T5p3AgA8TBAU9KX/view?usp=drive_link)
 [![GitHub](https://img.shields.io/badge/📦_Source_Code-GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Pritam9078/TrustWeave)
 
 </div>
@@ -19,70 +20,20 @@
 ## 🚀 Live Links
 
 - **🌐 Live Demo (Frontend):** [https://trustweave.vercel.app/](https://trustweave.vercel.app/)
-
-- **⚡ Backend API Server:** [https://trustweave-backend.onrender.com](https://trustweave-backend.onrender.com)
-
+- **⚡ Backend API Server:** [https://trustweave-backend.onrender.com](https://trustweave-backend.onrender.com/)
 - **📐 System Architecture:** [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md)
----
-
-## ✦ What is TrustWeave?
-
-**TrustWeave** ensures that every actor — human or AI — holds a cryptographically verifiable identity, and every consequential action is decided by a server-side authorization engine before anything happens.
-
-The central commitment is one sentence: **AI proposes, the authorization engine decides.** A model's output is a typed proposal with no authority of its own. The only path from a proposal to a domain service is the Tool Gateway, which re-authorizes from scratch.
-
-No intermediaries. No assumptions. Just math and policy.
 
 ---
 
-| Feature | Description |
-|---|---|
-| 🛡️ **11-Gate Authorization** | Evaluates capability, resource scope, policy, limits, and approvals in a fixed order and returns an explainable trace |
-| 🧠 **Secure RAG Architecture** | Role-aware Retrieval-Augmented Generation that filters out-of-scope context before it reaches the LLM |
-| 🤖 **Governed AI Operations** | Deterministic rule-based proposal extraction or live LLM integration with forced tool calls |
-| 🏛️ **Role-Based Identity** | Granular dashboards and scopes for **Admins**, **Managers**, **Auditors**, and **Users** |
-| 🔗 **Cryptographic Audit** | Real EVM integration storing Identity, Asset, Agent, and Proof Registries |
-| 💎 **Enterprise Interface** | A responsive, high-fidelity UI featuring dynamic timelines, data-rich tables, and policy evaluation breakdowns |
+## ✦ Secure RAG Pipeline & Smart Contracts
 
----
-
-## ✦ Technology Stack
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                       TRUSTWEAVE STACK                       │
-|──────────────────┬───────────────────────────────────────────┤
-│  Frontend        │  React 18 · Vite · React Router 6         │
-│                  │  TailwindCSS · Lucide Icons · Recharts    │
-├──────────────────┼───────────────────────────────────────────┤
-│  Backend         │  Node.js (≥ 22.5) · Fastify · TypeScript  │
-│                  │  Zod Validation · node:sqlite             │
-├──────────────────┼───────────────────────────────────────────┤
-│  Blockchain      │  Hardhat · Solidity (EVM)                 │
-│                  │  Ethers.js / Viem Integration             │
-├──────────────────┼───────────────────────────────────────────┤
-│  Integrations    │  Razorpay (Payments) · Anthropic (LLM)    │
-│                  │  Ed25519 DID Authentication               │
-└──────────────────┴───────────────────────────────────────────┘
-```
-
----
-
-## ✦ Secure RAG & Authorization
+**TrustWeave** ensures that every actor — human or AI — holds a cryptographically verifiable identity. The central commitment is: **AI proposes, the authorization engine decides.**
 
 ### 🧠 Secure Retrieval-Augmented Generation (RAG)
-TrustWeave implements a highly secure RAG pipeline that enforces access control **before** generation. The `ragService.ts` evaluates the authenticated actor's tenant boundaries and identity scope. If a user asks the LLM a question outside their clearance, the RAG engine filters the evidence, and the LLM explicitly denies the answer with an explainable authorization trace. It also features built-in prompt-injection detection to preserve the integrity of the intent engine.
+TrustWeave implements a highly secure RAG pipeline that enforces access control **before** generation. The RAG engine filters out-of-scope context based on the authenticated actor's tenant boundaries before it ever reaches the LLM.
 
-### 🛡️ The Eleven Gates
-The authorization engine processes intents through eleven deterministic gates in order: **capability catalog → identity status → membership → tenant boundary → emergency lockdown → agent state and tool allowlist → capability held → scope → scope constraints → agent limits → policies.**
-
-> *For the complete visual breakdown, sequence diagrams, and database schemas, please refer to the dedicated [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md).*
-
----
-
-## ✦ Smart Contract Addresses (Localhost EVM)
-
-The following core registries manage on-chain truth and cryptographic audit anchoring on the local Hardhat node. 
+### 🔗 Smart Contract Addresses (Localhost EVM)
+The following core registries manage on-chain truth and cryptographic audit anchoring on the local Hardhat node.
 
 | Registry Contract | Deployed Address |
 |---|---|
@@ -97,7 +48,7 @@ The following core registries manage on-chain truth and cryptographic audit anch
 
 ## ✦ Demo Accounts & Testing
 
-Printed by `npm run db:seed`. Password sign-in is a development convenience; DID challenge/response is the supported path, and the seed also prints a one-time private key for each identity.
+Printed by `npm run db:seed`. Password sign-in is a development convenience; DID challenge/response is the supported path.
 
 | Role | Email | Scope & Permissions |
 |---|---|---|
@@ -106,7 +57,7 @@ Printed by `npm run db:seed`. Password sign-in is a development convenience; DID
 | **Auditor** | `auditor@northwind.test` | Read-only — zero mutating capabilities |
 | **User** | `user@northwind.test` | Operations department, own records only |
 
-*Default password:* `TrustWeave!2026` 
+*Default password:* `TrustWeave!2026`
 
 **FinanceAgent-01** is also seeded. Its limits: approval required above ₹50,000, hard ceiling ₹2,00,000, ₹5,00,000 per day, 10 calls per day.
 
@@ -146,11 +97,3 @@ cd source/contracts
 npm run deploy:local          # Deploys Registries
 npm run wire-backend          # Pipes addresses to backend/.env
 ```
-
-<div align="center">
-
-Built with ❤️ and cryptographic conviction for a **trustless future.**
-
-*TrustWeave — AI proposes, the authorization engine decides.*
-
-</div>

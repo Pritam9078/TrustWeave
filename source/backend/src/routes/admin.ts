@@ -10,7 +10,7 @@ import * as audit from "../services/auditService.js";
 import { CAPABILITIES } from "../authorization/capabilities.js";
 import { notFound, badRequest } from "../core/errors.js";
 import { newTraceId } from "../core/ids.js";
-import { one, many } from "../db/clientV2.js";
+import { one, many } from "../db/client.js";
 
 /**
  * Identity & Access, Roles, Capabilities, Scopes, Policies, Organization, Security.
@@ -60,7 +60,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
     await authz.enforce({ actor, action: "IDENTITY_READ", resource: { type: "IDENTITY", id }, ip: req.ip });
-    const identity = identityService.getIdentity(actor.organizationId, id);
+    const identity = await identityService.getIdentity(actor.organizationId, id);
     if (!identity) throw notFound("Identity not found.");
     const perms = await identityService.effectivePermissions(id, actor.organizationId);
     const membership = await identityService.getMembership(id, actor.organizationId);
@@ -214,14 +214,14 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/api/roles", async (req) => {
     const actor = requireActor(req);
     await authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", query: true }, ip: req.ip });
-    return { roles: orgService.listRoles(actor.organizationId) };
+    return { roles: await orgService.listRoles(actor.organizationId) };
   });
 
   app.get("/api/roles/:id", async (req) => {
     const actor = requireActor(req);
     const { id } = req.params as { id: string };
     await authz.enforce({ actor, action: "ROLE_READ", resource: { type: "ROLE", id }, ip: req.ip });
-    const role = orgService.getRole(actor.organizationId, id);
+    const role = await orgService.getRole(actor.organizationId, id);
     if (!role) throw notFound("Role not found.");
     const members = many<any>(
       `SELECT i.id, i.display_name, i.did, i.status FROM identities i

@@ -1,4 +1,4 @@
-import { initDb, getDb, closeDb } from "./clientV2.js";
+import { initDb, getDb, closeDb } from "./client.js";
 
 async function main() {
   await initDb();

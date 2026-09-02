@@ -1,4 +1,4 @@
-import { one, many, j } from "../db/clientV2.js";
+import { one, many, j } from "../db/client.js";
 import { authorize as runEngine } from "../authorization/engine.js";
 import type { ScopeRecord } from "../authorization/scope.js";
 import type { PolicyRecord } from "../authorization/policy.js";

@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/clientV2.js";
+import { one, many, run, tx, j } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso, plusMinutes, isExpired } from "../core/time.js";
 import { sha256Hex, randomHex, safeEqual } from "../core/hash.js";

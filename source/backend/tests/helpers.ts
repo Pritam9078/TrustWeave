@@ -22,6 +22,7 @@ export interface Harness {
   dids: Record<string, string>;
   agentKey: string;
   agentId: string;
+  agentDid: string;
   assets: Record<string, string>;
   scopes: Record<string, string>;
   roles: Record<string, string>;
@@ -41,38 +42,41 @@ export async function createHarness(label: string): Promise<Harness> {
   process.env.DATABASE_FILE = dbFile;
   process.env.ALLOW_PASSWORD_LOGIN = "true";
   process.env.NODE_ENV = "test";
+  process.env.BLOCKCHAIN_ADAPTER = "memory";
+  const { setBlockchainAdapter, InMemoryBlockchainAdapter } = await import("../src/adapters/blockchain/index.js");
+  setBlockchainAdapter(new InMemoryBlockchainAdapter());
 
   await initDb(dbFile);
   await migrate();
-  orgService.syncCapabilityCatalog();
+  await orgService.syncCapabilityCatalog();
 
   const orgId = newId("org");
   run(`INSERT INTO organizations (id, name, slug, created_at) VALUES (?,?,?,?)`,
     orgId, "Testwind Ltd", `testwind-${Math.random().toString(36).slice(2, 8)}`, nowIso());
 
-  const finance = orgService.createDepartment(orgId, "Finance", "FIN");
-  const operations = orgService.createDepartment(orgId, "Operations", "OPS");
-  const legal = orgService.createDepartment(orgId, "Legal", "LEG");
+  const finance = await orgService.createDepartment(orgId, "Finance", "FIN");
+  const operations = await orgService.createDepartment(orgId, "Operations", "OPS");
+  const legal = await orgService.createDepartment(orgId, "Legal", "LEG");
 
   const roles: Record<string, string> = {};
   for (const [name, template] of Object.entries(ROLE_TEMPLATES)) {
-    roles[name] = orgService.createRole(orgId, { name, description: template.description, capabilities: [...template.capabilities] }).id;
+    roles[name] = (await orgService.createRole(orgId, { name, description: template.description, capabilities: [...template.capabilities] })).id;
   }
 
-  const orgScope = orgService.createScope(orgId, { name: "Whole org", scopeType: "ORGANIZATION", selector: { organizationId: orgId }, constraints: {} });
-  const financeScope = orgService.createScope(orgId, {
+  const orgScope = await orgService.createScope(orgId, { name: "Whole org", scopeType: "ORGANIZATION", selector: { organizationId: orgId }, constraints: {} });
+  const financeScope = await orgService.createScope(orgId, {
     name: "Finance dept", scopeType: "DEPARTMENT", selector: { departmentId: finance.id }, constraints: { maxAmount: 500000 },
   });
-  const opsScope = orgService.createScope(orgId, {
+  const opsScope = await orgService.createScope(orgId, {
     name: "Operations dept", scopeType: "DEPARTMENT", selector: { departmentId: operations.id }, constraints: { maxAmount: 200000 },
   });
-  const vendorScope = orgService.createScope(orgId, {
+  const vendorScope = await orgService.createScope(orgId, {
     name: "Agent vendors", scopeType: "VENDOR",
     selector: { vendors: ["Acme Cloud Services", "Globex Logistics"] }, constraints: { maxAmount: 100000 },
   });
 
-  orgService.attachScopeToRole(roles.Admin, orgScope.id);
-  orgService.attachScopeToRole(roles.Auditor, orgScope.id);
+  await orgService.attachScopeToRole(roles.Admin, orgScope.id);
+  await orgService.attachScopeToRole(roles.Auditor, orgScope.id);
   // Deliberately NOT attached to User: a plain member is confined to their own
   // department scope, which is what makes departmental isolation testable.
 
@@ -90,7 +94,7 @@ export async function createHarness(label: string): Promise<Harness> {
     { policyKey: "agent-vendor-allowlist", name: "Agent approved vendors", description: "", activate: true,
       conditions: { rules: [{ type: "MERCHANT_ALLOWLIST", values: ["Acme Cloud Services", "Globex Logistics"], onFail: "DENY" }] },
       appliesTo: { actions: ["PAYMENT_CREATE"], actorKinds: ["AGENT"] } },
-  ]) policyService.createPolicy(orgId, "system", p as any);
+  ]) await policyService.createPolicy(orgId, "system", p as any);
 
   const people = [
     { key: "admin", name: "Ada Admin", role: "Admin", dept: null, scopes: [] as string[] },
@@ -103,36 +107,36 @@ export async function createHarness(label: string): Promise<Harness> {
   const ids: Record<string, string> = {};
   const dids: Record<string, string> = {};
   for (const p of people) {
-    const { identity } = identityService.createIdentity({
+    const { identity } = await identityService.createIdentity({
       organizationId: orgId, displayName: p.name, email: `${p.key}@testwind.test`,
       kind: "HUMAN", departmentId: p.dept, password: PASSWORD, status: "ACTIVE",
     });
-    const m = identityService.getMembership(identity.id, orgId)!;
-    identityService.assignRole(m.id, roles[p.role], "system");
-    for (const s of p.scopes) identityService.assignScopeToMembership(m.id, s);
+    const m = (await identityService.getMembership(identity.id, orgId))!;
+    await identityService.assignRole(m.id, roles[p.role], "system");
+    for (const s of p.scopes) await identityService.assignScopeToMembership(m.id, s);
     ids[p.key] = identity.id;
     dids[p.key] = identity.did;
   }
 
-  const adminActor = identityService.buildActorContext(ids.admin, orgId)!;
+  const adminActor = (await identityService.buildActorContext(ids.admin, orgId))!;
 
-  const collection = assetService.createCollection(orgId, "IT Equipment", "");
+  const collection = await assetService.createCollection(orgId, "IT Equipment", "");
   const assets: Record<string, string> = {};
-  const financeAsset = assetService.createAsset(adminActor, newTraceId(), {
+  const financeAsset = await assetService.createAsset(adminActor, newTraceId(), {
     name: "Finance Laptop", assetType: "LAPTOP", collectionId: collection.id,
     departmentId: finance.id, ownerDid: dids.manager, metadata: { serial: "FIN-1" },
   });
   await assetService.mintAsset(adminActor, newTraceId(), financeAsset.id);
   assets.finance = financeAsset.id;
 
-  const opsAsset = assetService.createAsset(adminActor, newTraceId(), {
+  const opsAsset = await assetService.createAsset(adminActor, newTraceId(), {
     name: "Ops Monitor", assetType: "MONITOR", collectionId: collection.id,
     departmentId: operations.id, ownerDid: dids.user, metadata: { serial: "OPS-1" },
   });
   await assetService.mintAsset(adminActor, newTraceId(), opsAsset.id);
   assets.operations = opsAsset.id;
 
-  const legalAsset = assetService.createAsset(adminActor, newTraceId(), {
+  const legalAsset = await assetService.createAsset(adminActor, newTraceId(), {
     name: "Legal Laptop", assetType: "LAPTOP", collectionId: collection.id,
     departmentId: legal.id, ownerDid: null, metadata: { serial: "LEG-1" },
   });
@@ -146,12 +150,12 @@ export async function createHarness(label: string): Promise<Harness> {
     limits: { transactionLimit: 200000, approvalThreshold: 50000, dailyLimit: 500000, velocityCountPerDay: 10 },
   });
 
-  ragService.ingest({
+  await ragService.ingest({
     organizationId: orgId, sourceType: "INVOICE", title: "Invoice INV-1 Acme",
     content: "Invoice INV-1. Vendor: Acme Cloud Services. Amount due: INR 38500. Cloud hosting for July.",
     departmentId: finance.id, classification: "INTERNAL", scope: { departmentId: finance.id },
   } as any);
-  ragService.ingest({
+  await ragService.ingest({
     organizationId: orgId, sourceType: "HR_DOC", title: "Compensation Bands (Restricted)",
     content: "RESTRICTED. Salary bands by grade. This must never appear in a Finance-scoped retrieval result.",
     departmentId: legal.id, classification: "RESTRICTED", scope: { departmentId: legal.id }, requiredCapability: "ORG_MANAGE",
@@ -172,7 +176,7 @@ export async function createHarness(label: string): Promise<Harness> {
   return {
     app, orgId,
     departments: { finance: finance.id, operations: operations.id, legal: legal.id },
-    tokens, ids, dids, agentKey, agentId: agent.id, assets,
+    tokens, ids, dids, agentKey, agentId: agent.id, agentDid: agent.did, assets,
     scopes: { org: orgScope.id, finance: financeScope.id, operations: opsScope.id, vendor: vendorScope.id },
     roles, dbFile,
   };

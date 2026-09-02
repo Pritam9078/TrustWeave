@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/clientV2.js";
+import { one, many, run, tx, j } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { notFound } from "../core/errors.js";
@@ -109,7 +109,7 @@ export async function ingest(input: IngestInput) {
     );
     for (let ordinal = 0; ordinal < chunks.length; ordinal++) {
       const content = chunks[ordinal];
-      await run(`INSERT INTO document_chunks (id, document_id, ordinal, content, embedding, created_at) VALUES (?,?,?,?,?::vector,?)`,
+      await run(`INSERT INTO document_chunks (id, document_id, ordinal, content, embedding, created_at) VALUES (?,?,?,?,?,?)`,
         newId("chunk"), id, ordinal, content, j.enc(embed(content)), ts);
     }
   });
@@ -225,15 +225,21 @@ export async function retrieveForActor(actor: ActorContext, query: string, limit
   const placeholders = ids.map(() => "?").join(",");
   const queryVecStr = j.enc(embed(query));
   
-  // Use pgvector cosine distance `<=>`. The score is `1 - distance`.
-  const chunks = await many<any>(
-    `SELECT *, 1 - (embedding <=> ?::vector) as score 
-     FROM document_chunks 
-     WHERE document_id IN (${placeholders})
-     ORDER BY embedding <=> ?::vector 
-     LIMIT ?`,
-    queryVecStr, ...ids, queryVecStr, limit
+  const queryVec = embed(query);
+  
+  // In-memory scoring (SQLite fallback)
+  const allChunks = await many<any>(
+    `SELECT * FROM document_chunks WHERE document_id IN (${placeholders})`,
+    ...ids
   );
+  
+  const chunks = allChunks.map(c => {
+    const chunkVec = j.dec<number[]>(c.embedding, []);
+    return {
+      ...c,
+      score: cosine(queryVec, chunkVec)
+    };
+  }).sort((a, b) => b.score - a.score).slice(0, limit);
   const byDoc = new Map(accessible.map((d) => [d.id, d]));
 
   const scored = chunks

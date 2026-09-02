@@ -1,5 +1,5 @@
 import { buildApp } from "./app.js";
-import { initDb } from "./db/clientV2.js";
+import { initDb } from "./db/client.js";
 import { migrate } from "./db/migrate.js";
 import { env } from "./config/env.js";
 import { syncCapabilityCatalog } from "./services/orgService.js";

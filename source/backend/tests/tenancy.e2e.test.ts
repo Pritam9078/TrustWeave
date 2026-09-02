@@ -23,27 +23,27 @@ beforeAll(async () => {
   h = await createHarness("tenancy");
 
   const orgId = newId("org");
-  run(`INSERT INTO organizations (id, name, slug, created_at) VALUES (?,?,?,?)`,
+  await run(`INSERT INTO organizations (id, name, slug, created_at) VALUES (?,?,?,?)`,
     orgId, "Eastwind Rival Ltd", `eastwind-${Math.random().toString(36).slice(2, 8)}`, nowIso());
 
-  const dept = orgService.createDepartment(orgId, "Finance", "FIN");
-  const adminRole = orgService.createRole(orgId, {
+  const dept = await orgService.createDepartment(orgId, "Finance", "FIN");
+  const adminRole = await orgService.createRole(orgId, {
     name: "Admin", description: "rival admin", capabilities: [...ROLE_TEMPLATES.Admin.capabilities],
   });
-  const scope = orgService.createScope(orgId, {
+  const scope = await orgService.createScope(orgId, {
     name: "Whole org", scopeType: "ORGANIZATION", selector: { organizationId: orgId }, constraints: {},
   });
-  orgService.attachScopeToRole(adminRole.id, scope.id);
+  await orgService.attachScopeToRole(adminRole.id, scope.id);
 
-  const { identity } = identityService.createIdentity({
+  const { identity } = await identityService.createIdentity({
     organizationId: orgId, displayName: "Rival Admin", email: "rival@eastwind.test",
     kind: "HUMAN", departmentId: dept.id, password: PASSWORD, status: "ACTIVE",
   });
-  const membership = identityService.getMembership(identity.id, orgId)!;
-  identityService.assignRole(membership.id, adminRole.id, "system");
+  const membership = (await identityService.getMembership(identity.id, orgId))!;
+  await identityService.assignRole(membership.id, adminRole.id, "system");
 
-  const rivalActor = identityService.buildActorContext(identity.id, orgId)!;
-  const asset = assetService.createAsset(rivalActor, newTraceId(), {
+  const rivalActor = await identityService.buildActorContext(identity.id, orgId)!;
+  const asset = await assetService.createAsset(rivalActor, newTraceId(), {
     name: "Rival Laptop", assetType: "LAPTOP", collectionId: null,
     departmentId: dept.id, ownerDid: identity.did, metadata: { serial: "RIV-1" },
   });

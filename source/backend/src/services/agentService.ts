@@ -1,4 +1,4 @@
-import { one, many, run, tx, j } from "../db/clientV2.js";
+import { one, many, run, tx, j } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { randomHex, sha256Hex, hashObject } from "../core/hash.js";
@@ -131,7 +131,7 @@ export async function registerAgent(actor: ActorContext, input: RegisterAgentInp
   } catch { /* registration succeeds regardless; the chain write is retryable from the UI */ }
 
   // The token is returned exactly once and only its hash is stored.
-  return { agent: getAgent(actor.organizationId, agentId)!, token };
+  return { agent: await getAgent(actor.organizationId, agentId), token };
 }
 
 async function validateGrants(capabilities: string[], tools: string[]) {
@@ -178,7 +178,7 @@ export async function configureAgent(organizationId: string, agentId: string, pa
 export async function setAgentStatus(organizationId: string, agentId: string, status: "ACTIVE" | "FROZEN" | "REVOKED", actorId: string, reason: string) {
   const agent = await getAgent(organizationId, agentId);
   if (!agent) throw notFound("Agent not found.");
-  if ((await agent).status === "REVOKED") throw badRequest("AGENT_REVOKED", "A revoked agent cannot be reactivated.");
+  if (agent.status === "REVOKED") throw badRequest("AGENT_REVOKED", "A revoked agent cannot be reactivated.");
 
   const ts = nowIso();
   await tx(async () => {
@@ -188,8 +188,8 @@ export async function setAgentStatus(organizationId: string, agentId: string, st
     if (status === "REVOKED") {
       // Revocation is terminal: the underlying identity dies with the agent, so the
       // credential stops resolving at the door.
-      await run(`UPDATE identities SET status = await 'REVOKED', updated_at = ? WHERE id = ?`, ts, (await agent).identity_id);
-      revokeAllSessionsFor((await agent).identity_id);
+      await run(`UPDATE identities SET status = 'REVOKED', updated_at = ? WHERE id = ?`, ts, agent.identity_id);
+      revokeAllSessionsFor(agent.identity_id);
     } else if (status === "FROZEN") {
       // A freeze deliberately leaves the identity ACTIVE. The credential still resolves,
       // so the authorization engine gets to run and record an explicit AGENT_FROZEN
@@ -197,9 +197,9 @@ export async function setAgentStatus(organizationId: string, agentId: string, st
       // the call one layer earlier and leave the audit trail saying only "inactive
       // identity" — losing which tool the frozen agent reached for, which is exactly the
       // forensic detail an incident review needs.
-      revokeAllSessionsFor((await agent).identity_id);
+      revokeAllSessionsFor(agent.identity_id);
     } else {
-      await run(`UPDATE identities SET status = 'ACTIVE', updated_at = ? WHERE id = ?`, ts, (await agent).identity_id);
+      await run(`UPDATE identities SET status = 'ACTIVE', updated_at = ? WHERE id = ?`, ts, agent.identity_id);
     }
   });
 

@@ -1,4 +1,4 @@
-import { one, many, run, tx } from "../db/clientV2.js";
+import { one, many, run, tx } from "../db/client.js";
 import { newId } from "../core/ids.js";
 import { nowIso } from "../core/time.js";
 import { CAPABILITIES, capabilityId, isKnownCapability } from "../authorization/capabilities.js";
@@ -7,21 +7,21 @@ import { badRequest, conflict, notFound } from "../core/errors.js";
 /** Organizations, departments, roles, capabilities and scopes. */
 
 export async function getOrganization(id: string) {
-  return await one<any>(`SELECT * FROM organizations WHERE id = $1`, id);
+  return await one<any>(`SELECT * FROM organizations WHERE id = ?`, id);
 }
 
 export async function listDepartments(organizationId: string) {
-  return await many<any>(`SELECT * FROM departments WHERE organization_id = $1 ORDER BY name`, organizationId);
+  return await many<any>(`SELECT * FROM departments WHERE organization_id = ? ORDER BY name`, organizationId);
 }
 
 export async function createDepartment(organizationId: string, name: string, code: string) {
-  if (await one(`SELECT id FROM departments WHERE organization_id = $1 AND code = $2`, organizationId, code)) {
+  if (await one(`SELECT id FROM departments WHERE organization_id = ? AND code = ?`, organizationId, code)) {
     throw conflict("DEPARTMENT_EXISTS", `A department with code "${code}" already exists.`);
   }
   const id = newId("dept");
-  await run(`INSERT INTO departments (id, organization_id, name, code, created_at) VALUES ($1,$2,$3,$4,$5)`,
+  await run(`INSERT INTO departments (id, organization_id, name, code, created_at) VALUES (?,?,?,?,?)`,
     id, organizationId, name, code, nowIso());
-  return await one<any>(`SELECT * FROM departments WHERE id = $1`, id);
+  return await one<any>(`SELECT * FROM departments WHERE organization_id = ? AND id = ?`, organizationId, id);
 }
 
 /* -------------------------------------------------------------- capabilities */
@@ -35,12 +35,12 @@ export async function createDepartment(organizationId: string, name: string, cod
 export async function syncCapabilityCatalog() {
   for (const cap of CAPABILITIES) {
     const id = capabilityId(cap.action);
-    const existing = await one(`SELECT id FROM capabilities WHERE id = $1`, id);
+    const existing = await one(`SELECT id FROM capabilities WHERE id = ?`, id);
     if (existing) {
-      await run(`UPDATE capabilities SET resource_type = $1, domain = $2, description = $3, is_privileged = $4 WHERE id = $5`,
+      await run(`UPDATE capabilities SET resource_type = ?, domain = ?, description = ?, is_privileged = ? WHERE id = ?`,
         cap.resourceType, cap.domain, cap.description, cap.isPrivileged ? 1 : 0, id);
     } else {
-      await run(`INSERT INTO capabilities (id, action, resource_type, domain, description, is_privileged) VALUES ($1,$2,$3,$4,$5,$6)`,
+      await run(`INSERT INTO capabilities (id, action, resource_type, domain, description, is_privileged) VALUES (?,?,?,?,?,?)`,
         id, cap.action, cap.resourceType, cap.domain, cap.description, cap.isPrivileged ? 1 : 0);
     }
   }

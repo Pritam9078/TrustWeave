@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import * as paymentService from "../services/paymentService.js";
 import * as orgService from "../services/orgService.js";
 import { getRazorpayAdapter } from "../adapters/razorpay/index.js";
-import { one } from "../db/clientV2.js";
+import { one } from "../db/client.js";
 
 /**
  * Provider webhooks.
