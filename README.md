@@ -25,6 +25,24 @@
 
 ---
 
+## ✦ The Problem
+In modern enterprise environments, integrating Autonomous AI Agents into critical workflows (like finance, procurement, and operations) introduces significant security and accountability risks:
+1. **Unpredictable AI Logic:** Large Language Models (LLMs) can hallucinate or be manipulated via prompt injection, leading to unauthorized actions.
+2. **Lack of Immutable Auditability:** Traditional databases can be retroactively altered by malicious administrators, obscuring the true origin of an AI-driven decision.
+3. **Implicit Trust:** Most systems trust the AI's output implicitly without a dedicated, deterministic authorization layer to double-check the AI's intent against hardcoded business rules.
+
+## ✦ Our Solution
+**TrustWeave** solves these issues by shifting the paradigm from "AI executes" to **"AI proposes, the authorization engine decides."** 
+We provide a sovereign infrastructure layer that anchors AI operations to a cryptographically verifiable ledger. By combining deterministic Role-Based Access Control (RBAC), secure Retrieval-Augmented Generation (RAG), and an immutable EVM-based blockchain registry, TrustWeave guarantees that no action occurs without rigorous, verifiable authorization.
+
+## ✦ How It Works
+1. **Secure Intent Extraction:** When a user interacts with the system, the AI Agent extracts a structured "intent" (e.g., *transfer funds*).
+2. **The 11-Gate Authorization Engine:** Before execution, this intent is stripped of all autonomy and evaluated by a strict 11-step deterministic gateway. It checks capabilities, tenant boundaries, risk scores, hard limits, and human-in-the-loop (HITL) policies.
+3. **Execution & Immutable Auditing:** If approved, the action is executed. Simultaneously, the system generates a sequential cryptographic hash of the event, chaining it to the previous event state.
+4. **Blockchain Anchoring:** These audit trails are periodically anchored to our smart contracts deployed on an EVM-compatible network, creating a mathematically undeniable proof of the AI's action and the authorization decision.
+
+---
+
 ## ✦ Secure RAG Pipeline & Smart Contracts
 
 **TrustWeave** ensures that every actor — human or AI — holds a cryptographically verifiable identity. The central commitment is: **AI proposes, the authorization engine decides.**
