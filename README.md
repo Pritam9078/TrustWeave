@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="400" height="400" alt="trustweave-icon" src="https://github.com/user-attachments/assets/ea4c7b0e-0ad6-4a14-bb57-07ee128a32d9" />
+<img width="180" alt="trustweave-icon" src="https://github.com/user-attachments/assets/ea4c7b0e-0ad6-4a14-bb57-07ee128a32d9" />
 
 # ⬡ TRUSTWEAVE
 
